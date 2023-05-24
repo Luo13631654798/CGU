@@ -2,19 +2,19 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
 from scipy.io import savemat
-from MyModel import PositionalEncodingTF
 from utils import *
-from gcrnn import *
+from graph_unit import *
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
-from GDCRNN import *
 
 class Spatial_Attention_layer(nn.Module):
     '''
     compute spatial attention scores
     '''
+
     def __init__(self, DEVICE, in_channels, num_of_vertices, num_of_timesteps):
         super(Spatial_Attention_layer, self).__init__()
         self.num_of_timesteps = num_of_timesteps
@@ -24,7 +24,6 @@ class Spatial_Attention_layer(nn.Module):
         self.bs = nn.Parameter(torch.randn(1, num_of_vertices, num_of_vertices).to(DEVICE))
         self.Vs = nn.Parameter(torch.randn(num_of_vertices, num_of_vertices).to(DEVICE))
 
-
     def forward(self, x):
         '''
         :param x: (batch_size, N, F_in, T)
@@ -37,16 +36,19 @@ class Spatial_Attention_layer(nn.Module):
 
         product = torch.matmul(lhs, rhs)  # (b,N,T)(b,T,N) -> (B, N, N)
 
-        S = torch.matmul(self.Vs, torch.sigmoid(product + self.bs)) / torch.sqrt(torch.tensor(self.num_of_timesteps))  # (N,N)(B, N, N)->(B,N,N)
+        S = torch.matmul(self.Vs, torch.sigmoid(product + self.bs)) / torch.sqrt(
+            torch.tensor(self.num_of_timesteps))  # (N,N)(B, N, N)->(B,N,N)
 
         S_normalized = F.softmax(S, dim=-1)
 
         return S_normalized
 
+
 class Spatial_Attention_layer_2(nn.Module):
     '''
     compute spatial attention scores
     '''
+
     def __init__(self, DEVICE, in_channels, num_of_vertices, num_of_timesteps):
         super(Spatial_Attention_layer_2, self).__init__()
         self.num_of_timesteps = num_of_timesteps
@@ -56,7 +58,6 @@ class Spatial_Attention_layer_2(nn.Module):
         self.bs = nn.Parameter(torch.randn(1, num_of_vertices, num_of_vertices).to(DEVICE))
         self.Vs = nn.Parameter(torch.randn(num_of_vertices, num_of_vertices).to(DEVICE))
 
-
     def forward(self, x):
         '''
         :param x: (batch_size, N, F_in, T)
@@ -69,28 +70,32 @@ class Spatial_Attention_layer_2(nn.Module):
 
         product = torch.matmul(lhs, rhs)  # (b,N,T)(b,T,N) -> (B, N, N)
 
-        S = torch.matmul(self.Vs, torch.sigmoid(product + self.bs)) / torch.sqrt(torch.tensor(self.num_of_timesteps))  # (N,N)(B, N, N)->(B,N,N)
+        S = torch.matmul(self.Vs, torch.sigmoid(product + self.bs)) / torch.sqrt(
+            torch.tensor(self.num_of_timesteps))  # (N,N)(B, N, N)->(B,N,N)
 
         S_normalized = F.softmax(S, dim=-1)
 
         return S_normalized
 
+
 class Spatial_Attention_layer_Dot_Product(nn.Module):
     '''
     compute spatial attention scores
     '''
+
     def __init__(self, DEVICE, num_of_vertices, d_model):
         super(Spatial_Attention_layer_Dot_Product, self).__init__()
         self.d_model = d_model
         self.WK = nn.Parameter(torch.randn(d_model, d_model).to(DEVICE))
         self.WQ = nn.Parameter(torch.randn(d_model, d_model).to(DEVICE))
-#        print(self.WK)
-        #nn.init.xavier_uniform_(self.WK.data, gain=1)
-        #nn.init.xavier_uniform_(self.WQ.data, gain=1)
-        #nn.init.normal_(self.WK, mean=0, std=1)
-        #nn.init.normal_(self.WQ, mean=0, std=1)
-        #nn.init.xavier_normal_(self.WK.data, gain=1)
-        #nn.init.xavier_normal_(self.WQ.data, gain=1)
+
+    #        print(self.WK)
+    # nn.init.xavier_uniform_(self.WK.data, gain=1)
+    # nn.init.xavier_uniform_(self.WQ.data, gain=1)
+    # nn.init.normal_(self.WK, mean=0, std=1)
+    # nn.init.normal_(self.WQ, mean=0, std=1)
+    # nn.init.xavier_normal_(self.WK.data, gain=1)
+    # nn.init.xavier_normal_(self.WQ.data, gain=1)
     def forward(self, x):
         '''
         :param x: (batch_size, N, T)
@@ -108,10 +113,12 @@ class Spatial_Attention_layer_Dot_Product(nn.Module):
 
         return S_normalized
 
+
 class Spatial_Attention_layer_Dot_Product_fea_emb(nn.Module):
     '''
     compute spatial attention scores
     '''
+
     def __init__(self, DEVICE, num_of_vertices, d_model):
         super(Spatial_Attention_layer_Dot_Product_fea_emb, self).__init__()
         self.d_model = d_model
@@ -121,6 +128,7 @@ class Spatial_Attention_layer_Dot_Product_fea_emb(nn.Module):
         self.WK = nn.Parameter(torch.randn(d_model, d_model).to(DEVICE))
         self.WQ = nn.Parameter(torch.randn(d_model, d_model).to(DEVICE))
         self.device = DEVICE
+
     def forward(self, x):
         '''
         :param x: (batch_size, N, T)
@@ -142,7 +150,33 @@ class Spatial_Attention_layer_Dot_Product_fea_emb(nn.Module):
         S_normalized = F.softmax(S, dim=-1)
 
         return S_normalized
-#class Spatial_Attention_layer_Dot_Product_fea_emb(nn.Module):
+
+class PositionalEncodingTF(nn.Module):
+    def __init__(self, d_model, max_len=500, MAX=10000):
+        super(PositionalEncodingTF, self).__init__()
+        self.max_len = max_len
+        self.d_model = d_model
+        self.MAX = MAX
+        self._num_timescales = d_model // 2
+
+    def getPE(self, P_time):
+        B = P_time.shape[1]
+
+        timescales = self.max_len ** np.linspace(0, 1, self._num_timescales)
+
+        times = torch.Tensor(P_time.cpu()).unsqueeze(2)
+        scaled_time = times / torch.Tensor(timescales[None, None, :])
+
+        pe = torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], axis=-1)  # T x B x d_model
+        pe = pe.type(torch.FloatTensor)
+
+        return pe
+
+    def forward(self, P_time):
+        pe = self.getPE(P_time)
+        pe = pe.cuda()
+        return pe
+# class Spatial_Attention_layer_Dot_Product_fea_emb(nn.Module):
 #    '''
 #    compute spatial attention scores
 #    '''
@@ -178,7 +212,8 @@ class Spatial_Attention_layer_Dot_Product_fea_emb(nn.Module):
 #        return S_normalized
 class ASTGCN_block_GRU_transformer(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -193,8 +228,10 @@ class ASTGCN_block_GRU_transformer(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop_distribution(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop_distribution(d_in=self.attention_d_model, d_model=self.graph_node_d_model,
+                                                           d_out=1, n_layers=n_layer,
+                                                           num_nodes=num_of_vertices, support_len=1,
+                                                           kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -212,6 +249,7 @@ class ASTGCN_block_GRU_transformer(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -219,50 +257,52 @@ class ASTGCN_block_GRU_transformer(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-#        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input)
-#        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,src_key_padding_mask=\
-#        (1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)).squeeze(-1).permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        #        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input)
+        #        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,src_key_padding_mask=\
+        #        (1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)).squeeze(-1).permute(1, 0))
+        temporal_transformer_input = temporal_transformer_input \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
-#        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, 
-#            src_key_padding_mask=(1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)))
+        #        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+        #            src_key_padding_mask=(1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)))
         x_TAt = mask * temporal_transformer_input + (1 - mask) * temporal_transformer_output
-        #x_TAt = temporal_transformer_output
+        # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
 
+        #        ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
+        #        ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
+        #        ffted_length = (ffted_real ** 2 + ffted_imag ** 2) ** 0.5
 
-#        ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
-#        ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
-#        ffted_length = (ffted_real ** 2 + ffted_imag ** 2) ** 0.5
-
-#        ffted_length = torch.sqrt(ffted_real * ffted_real + ffted_imag * ffted_imag).to(
-#            torch.float32)  # [batch, variable_num, 1, time]
+        #        ffted_length = torch.sqrt(ffted_real * ffted_real + ffted_imag * ffted_imag).to(
+        #            torch.float32)  # [batch, variable_num, 1, time]
         # ffted_phi = torch.arctan(ffted_imag / (ffted_real + 1e-8))
         # ffted_input = torch.cat([ffted_length, ffted_phi], dim=2)
-#        lambd = 0
-#        ffted_length = lambd * ffted_length + (1 - lambd) * x
-#        ffted_length = torch.cat([ffted_length, x], dim=-1)
+        #        lambd = 0
+        #        ffted_length = lambd * ffted_length + (1 - lambd) * x
+        #        ffted_length = torch.cat([ffted_length, x], dim=-1)
         spatial_At = torch.mean(self.SAt(torch.squeeze(x)), dim=0)
-        
-#        spatial_At = 0.5 * (spatial_At + spatial_At.T)
-        
-#        spatial_At_mask = spatial_At < 1 / 36 
-#        spatial_At[spatial_At_mask] = 0
-#        spatial_At[~spatial_At_mask] = spatial_At[~spatial_At_mask] * 3
+
+        #        spatial_At = 0.5 * (spatial_At + spatial_At.T)
+
+        #        spatial_At_mask = spatial_At < 1 / 36
+        #        spatial_At[spatial_At_mask] = 0
+        #        spatial_At[~spatial_At_mask] = spatial_At[~spatial_At_mask] * 3
         # spatial_At = torch.mean(self.SAt(ffted_length), dim=0)
 
         # [batches, nodes, hidden_dim, timestamps]
@@ -277,9 +317,12 @@ class ASTGCN_block_GRU_transformer(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class ASTGCN_block_GRU_transformer_wo_variable_attention(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer_wo_variable_attention, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -291,11 +334,13 @@ class ASTGCN_block_GRU_transformer_wo_variable_attention(nn.Module):
 
         self.time_encoder = PositionalEncodingTF(self.attention_d_model, num_of_timesteps, 100)
         self.time_encoder2 = PositionalEncodingTF(self.graph_node_d_model, num_of_timesteps, 100)
-#        self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
+        #        self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop_distribution(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop_distribution(d_in=self.attention_d_model, d_model=self.graph_node_d_model,
+                                                           d_out=1, n_layers=n_layer,
+                                                           num_nodes=num_of_vertices, support_len=1,
+                                                           kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -313,6 +358,7 @@ class ASTGCN_block_GRU_transformer_wo_variable_attention(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -320,50 +366,52 @@ class ASTGCN_block_GRU_transformer_wo_variable_attention(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-#        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input)
-#        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,src_key_padding_mask=\
-#        (1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)).squeeze(-1).permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        #        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input)
+        #        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,src_key_padding_mask=\
+        #        (1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)).squeeze(-1).permute(1, 0))
+        temporal_transformer_input = temporal_transformer_input \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
-#        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, 
-#            src_key_padding_mask=(1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)))
+        #        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+        #            src_key_padding_mask=(1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)))
         x_TAt = mask * temporal_transformer_input + (1 - mask) * temporal_transformer_output
-        #x_TAt = temporal_transformer_output
+        # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
 
+        #        ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
+        #        ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
+        #        ffted_length = (ffted_real ** 2 + ffted_imag ** 2) ** 0.5
 
-#        ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
-#        ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
-#        ffted_length = (ffted_real ** 2 + ffted_imag ** 2) ** 0.5
-
-#        ffted_length = torch.sqrt(ffted_real * ffted_real + ffted_imag * ffted_imag).to(
-#            torch.float32)  # [batch, variable_num, 1, time]
+        #        ffted_length = torch.sqrt(ffted_real * ffted_real + ffted_imag * ffted_imag).to(
+        #            torch.float32)  # [batch, variable_num, 1, time]
         # ffted_phi = torch.arctan(ffted_imag / (ffted_real + 1e-8))
         # ffted_input = torch.cat([ffted_length, ffted_phi], dim=2)
-#        lambd = 0
-#        ffted_length = lambd * ffted_length + (1 - lambd) * x
-#        ffted_length = torch.cat([ffted_length, x], dim=-1)
-#        spatial_At = torch.mean(self.SAt(torch.squeeze(x)), dim=0)
+        #        lambd = 0
+        #        ffted_length = lambd * ffted_length + (1 - lambd) * x
+        #        ffted_length = torch.cat([ffted_length, x], dim=-1)
+        #        spatial_At = torch.mean(self.SAt(torch.squeeze(x)), dim=0)
         spatial_At = torch.ones(size=[num_of_vertices, num_of_vertices]).to(self.DEVICE) / num_of_vertices
-#        spatial_At = 0.5 * (spatial_At + spatial_At.T)
-        
-#        spatial_At_mask = spatial_At < 1 / 36 
-#        spatial_At[spatial_At_mask] = 0
-#        spatial_At[~spatial_At_mask] = spatial_At[~spatial_At_mask] * 3
+        #        spatial_At = 0.5 * (spatial_At + spatial_At.T)
+
+        #        spatial_At_mask = spatial_At < 1 / 36
+        #        spatial_At[spatial_At_mask] = 0
+        #        spatial_At[~spatial_At_mask] = spatial_At[~spatial_At_mask] * 3
         # spatial_At = torch.mean(self.SAt(ffted_length), dim=0)
 
         # [batches, nodes, hidden_dim, timestamps]
@@ -378,9 +426,12 @@ class ASTGCN_block_GRU_transformer_wo_variable_attention(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class ASTGCN_block_GRU_transformer6(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer6, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -395,8 +446,9 @@ class ASTGCN_block_GRU_transformer6(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(2 * graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -414,6 +466,7 @@ class ASTGCN_block_GRU_transformer6(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -421,24 +474,26 @@ class ASTGCN_block_GRU_transformer6(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
         # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
 
         ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
         ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
@@ -465,9 +520,11 @@ class ASTGCN_block_GRU_transformer6(nn.Module):
             output = self.classifier(torch.squeeze(out))
         return output
 
+
 class ASTGCN_block_GRU_transformer5(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer5, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -482,8 +539,9 @@ class ASTGCN_block_GRU_transformer5(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -501,6 +559,7 @@ class ASTGCN_block_GRU_transformer5(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -508,24 +567,26 @@ class ASTGCN_block_GRU_transformer5(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
         # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
 
         num_of_observation = torch.sum(mask, dim=-1)
         # num_of_observation
@@ -559,7 +620,8 @@ class ASTGCN_block_GRU_transformer5(nn.Module):
 
 class ASTGCN_block_GRU_transformer_wo_temporal_attention(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer_wo_temporal_attention, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -574,8 +636,9 @@ class ASTGCN_block_GRU_transformer_wo_temporal_attention(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -593,6 +656,7 @@ class ASTGCN_block_GRU_transformer_wo_temporal_attention(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -600,7 +664,8 @@ class ASTGCN_block_GRU_transformer_wo_temporal_attention(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
 
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
@@ -610,7 +675,6 @@ class ASTGCN_block_GRU_transformer_wo_temporal_attention(nn.Module):
         x_TAt = temporal_observation_embedding
         # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
 
         ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
         ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
@@ -635,9 +699,11 @@ class ASTGCN_block_GRU_transformer_wo_temporal_attention(nn.Module):
             output = self.classifier(torch.squeeze(out))
         return output
 
+
 class ASTGCN_block_GRU_transformer_wo_frequency_variable_attention(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer_wo_frequency_variable_attention, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -651,8 +717,9 @@ class ASTGCN_block_GRU_transformer_wo_frequency_variable_attention(nn.Module):
         self.time_encoder2 = PositionalEncodingTF(self.graph_node_d_model, num_of_timesteps, 100)
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -670,6 +737,7 @@ class ASTGCN_block_GRU_transformer_wo_frequency_variable_attention(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -677,24 +745,26 @@ class ASTGCN_block_GRU_transformer_wo_frequency_variable_attention(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
         # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
 
         # ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
         # ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
@@ -719,7 +789,8 @@ class ASTGCN_block_GRU_transformer_wo_frequency_variable_attention(nn.Module):
             output = self.classifier(torch.squeeze(out))
         return output
 
-#class ASTGCN_block_GRU_transformer_wo_variable_attention(nn.Module):
+
+# class ASTGCN_block_GRU_transformer_wo_variable_attention(nn.Module):
 #
 #    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
 #        super(ASTGCN_block_GRU_transformer_wo_variable_attention, self).__init__()
@@ -805,7 +876,8 @@ class ASTGCN_block_GRU_transformer_wo_frequency_variable_attention(nn.Module):
 
 class ASTGCN_block_GRU_transformer_wo_time_interval_modeling(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer_wo_time_interval_modeling, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -820,8 +892,9 @@ class ASTGCN_block_GRU_transformer_wo_time_interval_modeling(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_wo_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_wo_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                                 n_layers=n_layer,
+                                                 num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -839,6 +912,7 @@ class ASTGCN_block_GRU_transformer_wo_time_interval_modeling(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -846,24 +920,26 @@ class ASTGCN_block_GRU_transformer_wo_time_interval_modeling(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
         # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
 
         ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
         ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
@@ -887,9 +963,12 @@ class ASTGCN_block_GRU_transformer_wo_time_interval_modeling(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class ASTGCN_block_GRU_transformer2(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer2, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -906,8 +985,9 @@ class ASTGCN_block_GRU_transformer2(nn.Module):
         # self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, attention_d_model)
         self.SAt = Spatial_Attention_layer(DEVICE, 3, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -925,6 +1005,7 @@ class ASTGCN_block_GRU_transformer2(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -932,20 +1013,22 @@ class ASTGCN_block_GRU_transformer2(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
         temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
                                                                         src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
         # x_TAt = temporal_transformer_output
@@ -975,9 +1058,11 @@ class ASTGCN_block_GRU_transformer2(nn.Module):
             output = self.classifier(torch.squeeze(out))
         return output
 
+
 class ASTGCN_block_GRU_transformer3(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer3, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -992,8 +1077,9 @@ class ASTGCN_block_GRU_transformer3(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -1011,6 +1097,7 @@ class ASTGCN_block_GRU_transformer3(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -1018,27 +1105,29 @@ class ASTGCN_block_GRU_transformer3(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
         # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
 
-
         num = torch.sum(mask, dim=-1).permute(0, 2, 1)
-        num[torch.where(num==0)] = 1
+        num[torch.where(num == 0)] = 1
         mean = torch.repeat_interleave((torch.sum(x, dim=-1) / (num)).unsqueeze(-1),
                                        num_of_timesteps, dim=-1)
 
@@ -1066,9 +1155,11 @@ class ASTGCN_block_GRU_transformer3(nn.Module):
             output = self.classifier(torch.squeeze(out))
         return output
 
+
 class ASTGCN_block_GRU_transformer4(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer4, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -1083,8 +1174,9 @@ class ASTGCN_block_GRU_transformer4(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -1102,6 +1194,7 @@ class ASTGCN_block_GRU_transformer4(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -1109,19 +1202,22 @@ class ASTGCN_block_GRU_transformer4(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
         # x_TAt = temporal_transformer_output
@@ -1163,7 +1259,7 @@ class ASTGCN_block_GRU_transformer4(nn.Module):
         return output
 
 
-#class ASTGCN_block_GRU_transformer_nufft(nn.Module):
+# class ASTGCN_block_GRU_transformer_nufft(nn.Module):
 #
 #    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
 #        super(ASTGCN_block_GRU_transformer_nufft, self).__init__()
@@ -1246,7 +1342,8 @@ class ASTGCN_block_GRU_transformer4(nn.Module):
 
 class ASTGCN_block_GRU_transformer_nufft(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer_nufft, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -1265,8 +1362,9 @@ class ASTGCN_block_GRU_transformer_nufft(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, 2 * num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.attention_d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -1284,6 +1382,7 @@ class ASTGCN_block_GRU_transformer_nufft(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, nufft, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -1291,19 +1390,22 @@ class ASTGCN_block_GRU_transformer_nufft(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
         # x_TAt = temporal_transformer_output
@@ -1318,11 +1420,10 @@ class ASTGCN_block_GRU_transformer_nufft(nn.Module):
         # fuse_embedding = self.spectral_projection(fuse_embedding)
         # fuse_embedding = self.spectral_projection2(fuse_embedding)
         # nufft = self.spectral_projection(nufft[:, 1, :, :].permute(0, 2, 1))
-#        fuse_embedding = torch.cat([nufft[:, 1, :, :].permute(0, 2, 1), torch.squeeze(x)], dim=-1)
+        #        fuse_embedding = torch.cat([nufft[:, 1, :, :].permute(0, 2, 1), torch.squeeze(x)], dim=-1)
         step_emb = step * mask / 48
         fuse_embedding = torch.cat([nufft[:, 1, :, :].permute(0, 2, 1), torch.squeeze(step_emb)], dim=-1)
         spatial_At = torch.mean(self.SAt(torch.squeeze(fuse_embedding)), dim=0)
-
 
         # [batches, nodes, hidden_dim, timestamps]
         spatial_gcn = self.GCRNN(x_TAt, spatial_At, delta_t, lengths, graph_input_time_encoding, mask)
@@ -1337,9 +1438,11 @@ class ASTGCN_block_GRU_transformer_nufft(nn.Module):
             output = self.classifier(torch.squeeze(out))
         return output
 
+
 class ASTGCN_block_GRU_transformer_fre(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer_fre, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -1355,8 +1458,9 @@ class ASTGCN_block_GRU_transformer_fre(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
         self.frequency_projection = nn.Linear(num_of_timesteps, self.graph_node_d_model // 4)
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model + graph_node_d_model // 4, 1, kernel_size=1)
         self.d_static = d_static
@@ -1374,6 +1478,7 @@ class ASTGCN_block_GRU_transformer_fre(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -1381,24 +1486,26 @@ class ASTGCN_block_GRU_transformer_fre(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
         # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
 
         ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
         ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
@@ -1427,10 +1534,12 @@ class ASTGCN_block_GRU_transformer_fre(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
-        
+
+
 class ASTGCN_block_GRU_transformer_density(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer_density, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -1445,8 +1554,9 @@ class ASTGCN_block_GRU_transformer_density(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop_density(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop_density(d_in=self.attention_d_model, d_model=self.graph_node_d_model,
+                                                      d_out=1, n_layers=n_layer,
+                                                      num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
         self.density_weight = nn.Linear(1, graph_node_d_model)
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -1464,6 +1574,7 @@ class ASTGCN_block_GRU_transformer_density(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, density, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -1471,24 +1582,26 @@ class ASTGCN_block_GRU_transformer_density(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
         # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
 
         ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
         ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
@@ -1512,21 +1625,25 @@ class ASTGCN_block_GRU_transformer_density(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class Spatial_Attention_layer_Dot_Product_prune(nn.Module):
     '''
     compute spatial attention scores
     '''
+
     def __init__(self, DEVICE, num_of_vertices, d_model):
         super(Spatial_Attention_layer_Dot_Product_prune, self).__init__()
         self.d_model = d_model
         self.WK = nn.Parameter(torch.randn(d_model, d_model).to(DEVICE))
         self.WQ = nn.Parameter(torch.randn(d_model, d_model).to(DEVICE))
-        #nn.init.xavier_uniform_(self.WK.data, gain=1)
-        #nn.init.xavier_uniform_(self.WQ.data, gain=1)
-        #nn.init.normal_(self.WK, mean=0, std=1)
-        #nn.init.normal_(self.WQ, mean=0, std=1)
-        #nn.init.xavier_normal_(self.WK.data, gain=1)
-        #nn.init.xavier_normal_(self.WQ.data, gain=1)
+        # nn.init.xavier_uniform_(self.WK.data, gain=1)
+        # nn.init.xavier_uniform_(self.WQ.data, gain=1)
+        # nn.init.normal_(self.WK, mean=0, std=1)
+        # nn.init.normal_(self.WQ, mean=0, std=1)
+        # nn.init.xavier_normal_(self.WK.data, gain=1)
+        # nn.init.xavier_normal_(self.WQ.data, gain=1)
+
     def forward(self, x, prune_mask):
         '''
         :param x: (batch_size, N, T)
@@ -1545,9 +1662,12 @@ class Spatial_Attention_layer_Dot_Product_prune(nn.Module):
         S_normalized = F.softmax(S, dim=-1)
 
         return S_normalized
+
+
 class ASTGCN_block_GRU_transformer_prune(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer_prune, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -1562,8 +1682,9 @@ class ASTGCN_block_GRU_transformer_prune(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product_prune(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -1581,6 +1702,7 @@ class ASTGCN_block_GRU_transformer_prune(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -1588,19 +1710,22 @@ class ASTGCN_block_GRU_transformer_prune(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
         # x_TAt = temporal_transformer_output
@@ -1630,9 +1755,12 @@ class ASTGCN_block_GRU_transformer_prune(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class ASTGCN_block_GRU_transformer7(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer7, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -1647,8 +1775,9 @@ class ASTGCN_block_GRU_transformer7(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, attention_d_model)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -1666,6 +1795,7 @@ class ASTGCN_block_GRU_transformer7(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -1673,24 +1803,26 @@ class ASTGCN_block_GRU_transformer7(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
-        #x_TAt = temporal_transformer_output
+        # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
 
         ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
         ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
@@ -1714,9 +1846,12 @@ class ASTGCN_block_GRU_transformer7(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class ASTGCN_block_GRU_transformer9(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer9, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -1731,8 +1866,9 @@ class ASTGCN_block_GRU_transformer9(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -1750,6 +1886,7 @@ class ASTGCN_block_GRU_transformer9(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -1757,26 +1894,31 @@ class ASTGCN_block_GRU_transformer9(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
         # temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,src_key_padding_mask=\
-        (1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)).squeeze(-1).permute(1, 0))
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask= \
+                                                                            (1 - mask.permute(3, 0, 2, 1).reshape(
+                                                                                num_of_timesteps,
+                                                                                batch_size * num_of_vertices,
+                                                                                1)).squeeze(-1).permute(1, 0))
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
-        #x_TAt = temporal_transformer_output
+        # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
 
         # ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
         # ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
@@ -1797,7 +1939,6 @@ class ASTGCN_block_GRU_transformer9(nn.Module):
         # [batches, nodes, hidden_dim, timestamps]
         spatial_gcn = self.GCRNN(x_TAt, spatial_At, delta_t, lengths, graph_input_time_encoding, mask)
 
-
         out = torch.squeeze(self.final_conv(spatial_gcn.unsqueeze(-1)))
 
         # (b,N,F,T)->(b,T,N,F)-conv<1,F>->(b,c_out*T,N,1)->(b,c_out*T,N)->(b,N,T)
@@ -1807,9 +1948,12 @@ class ASTGCN_block_GRU_transformer9(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class ASTGCN_block_GRU_transformer10(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer10, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -1826,8 +1970,9 @@ class ASTGCN_block_GRU_transformer10(nn.Module):
         self.sum_adj = torch.zeros(size=[num_of_vertices, num_of_vertices]).to(DEVICE)
         self.total = 0
         self.spatial_At = torch.zeros(size=[num_of_vertices, num_of_vertices]).to(DEVICE)
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -1845,6 +1990,7 @@ class ASTGCN_block_GRU_transformer10(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0, update=False):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -1852,27 +1998,31 @@ class ASTGCN_block_GRU_transformer10(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
         # temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,src_key_padding_mask=\
-        (1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)).squeeze(-1).permute(1, 0))
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask= \
+                                                                            (1 - mask.permute(3, 0, 2, 1).reshape(
+                                                                                num_of_timesteps,
+                                                                                batch_size * num_of_vertices,
+                                                                                1)).squeeze(-1).permute(1, 0))
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
-        #x_TAt = temporal_transformer_output
+        # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
-
 
         if update == True:
             ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
@@ -1895,7 +2045,6 @@ class ASTGCN_block_GRU_transformer10(nn.Module):
         # [batches, nodes, hidden_dim, timestamps]
         spatial_gcn = self.GCRNN(x_TAt, self.spatial_At, delta_t, lengths, graph_input_time_encoding, mask)
 
-
         out = torch.squeeze(self.final_conv(spatial_gcn.unsqueeze(-1)))
 
         # (b,N,F,T)->(b,T,N,F)-conv<1,F>->(b,c_out*T,N,1)->(b,c_out*T,N)->(b,N,T)
@@ -1905,9 +2054,12 @@ class ASTGCN_block_GRU_transformer10(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class ASTGCN_block_GRU_transformer11(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer11, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -1922,8 +2074,9 @@ class ASTGCN_block_GRU_transformer11(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop_exact(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop_exact(d_in=self.attention_d_model, d_model=self.graph_node_d_model,
+                                                    d_out=1, n_layers=n_layer,
+                                                    num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -1941,6 +2094,7 @@ class ASTGCN_block_GRU_transformer11(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -1948,26 +2102,31 @@ class ASTGCN_block_GRU_transformer11(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
         # temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,src_key_padding_mask=\
-        (1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)).squeeze(-1).permute(1, 0))
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask= \
+                                                                            (1 - mask.permute(3, 0, 2, 1).reshape(
+                                                                                num_of_timesteps,
+                                                                                batch_size * num_of_vertices,
+                                                                                1)).squeeze(-1).permute(1, 0))
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
-        #x_TAt = temporal_transformer_output
+        # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
 
         ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
         ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
@@ -1992,9 +2151,11 @@ class ASTGCN_block_GRU_transformer11(nn.Module):
             output = self.classifier(torch.squeeze(out))
         return output
 
+
 class ASTGCN_block_GRU_transformer12(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer12, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -2014,8 +2175,9 @@ class ASTGCN_block_GRU_transformer12(nn.Module):
         # self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -2033,6 +2195,7 @@ class ASTGCN_block_GRU_transformer12(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -2040,26 +2203,31 @@ class ASTGCN_block_GRU_transformer12(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
         # temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,src_key_padding_mask=\
-        (1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)).squeeze(-1).permute(1, 0))
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask= \
+                                                                            (1 - mask.permute(3, 0, 2, 1).reshape(
+                                                                                num_of_timesteps,
+                                                                                batch_size * num_of_vertices,
+                                                                                1)).squeeze(-1).permute(1, 0))
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
-        #x_TAt = temporal_transformer_output
+        # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
 
         ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
         ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
@@ -2094,10 +2262,13 @@ class ASTGCN_block_GRU_transformer12(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class Spatial_Attention_layer_Dot_Product_stem(nn.Module):
     '''
     compute spatial attention scores
     '''
+
     def __init__(self, DEVICE, num_of_vertices, d_model):
         super(Spatial_Attention_layer_Dot_Product_stem, self).__init__()
         self.d_model = d_model
@@ -2105,12 +2276,13 @@ class Spatial_Attention_layer_Dot_Product_stem(nn.Module):
         self.WQ = nn.Parameter(torch.randn(d_model, d_model).to(DEVICE))
         self.leakyrelu = nn.LeakyReLU(0.2)
         self.dropout = nn.Dropout(0.5)
-        #nn.init.xavier_uniform_(self.WK.data, gain=1)
-        #nn.init.xavier_uniform_(self.WQ.data, gain=1)
-        #nn.init.normal_(self.WK, mean=0, std=1)
-        #nn.init.normal_(self.WQ, mean=0, std=1)
-        #nn.init.xavier_normal_(self.WK.data, gain=1)
-        #nn.init.xavier_normal_(self.WQ.data, gain=1)
+        # nn.init.xavier_uniform_(self.WK.data, gain=1)
+        # nn.init.xavier_uniform_(self.WQ.data, gain=1)
+        # nn.init.normal_(self.WK, mean=0, std=1)
+        # nn.init.normal_(self.WQ, mean=0, std=1)
+        # nn.init.xavier_normal_(self.WK.data, gain=1)
+        # nn.init.xavier_normal_(self.WQ.data, gain=1)
+
     def forward(self, x):
         '''
         :param x: (batch_size, N, T)
@@ -2132,9 +2304,11 @@ class Spatial_Attention_layer_Dot_Product_stem(nn.Module):
 
         return S_normalized
 
+
 class ASTGCN_block_GRU_transformer13(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer13, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -2149,8 +2323,9 @@ class ASTGCN_block_GRU_transformer13(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product_stem(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -2168,6 +2343,7 @@ class ASTGCN_block_GRU_transformer13(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -2175,26 +2351,31 @@ class ASTGCN_block_GRU_transformer13(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
         # temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,src_key_padding_mask=\
-        (1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)).squeeze(-1).permute(1, 0))
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask= \
+                                                                            (1 - mask.permute(3, 0, 2, 1).reshape(
+                                                                                num_of_timesteps,
+                                                                                batch_size * num_of_vertices,
+                                                                                1)).squeeze(-1).permute(1, 0))
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
-        #x_TAt = temporal_transformer_output
+        # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
 
         ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
         ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
@@ -2220,9 +2401,12 @@ class ASTGCN_block_GRU_transformer13(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class ASTGCN_block_GRU_transformer_nufft_3(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer_nufft_3, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -2244,7 +2428,7 @@ class ASTGCN_block_GRU_transformer_nufft_3(nn.Module):
             nn.ReLU()
         )
         self.fuse_encoder = nn.Sequential(
-            nn.Linear(in_features=2 * self.attention_d_model, out_features=2*self.attention_d_model),
+            nn.Linear(in_features=2 * self.attention_d_model, out_features=2 * self.attention_d_model),
             nn.ReLU()
         )
         # self.spectral_input_projection = nn.Conv2d(in_channels=3, out_channels=self.attention_d_model, kernel_size=1)
@@ -2252,12 +2436,12 @@ class ASTGCN_block_GRU_transformer_nufft_3(nn.Module):
         # self.spectral_projection = nn.Conv2d(5, 1024, kernel_size=1)
         # self.spectral_projection2 = nn.Conv2d(1024, 1, kernel_size=1)
 
-
-        self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices,2* self.attention_d_model)
+        self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, 2 * self.attention_d_model)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.attention_d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -2275,6 +2459,7 @@ class ASTGCN_block_GRU_transformer_nufft_3(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, nufft, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -2282,19 +2467,22 @@ class ASTGCN_block_GRU_transformer_nufft_3(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
         # x_TAt = temporal_transformer_output
@@ -2321,7 +2509,6 @@ class ASTGCN_block_GRU_transformer_nufft_3(nn.Module):
         # spatial_At = torch.mean(self.SAt(torch.squeeze(fuse_embedding)), dim=0)
         spatial_At = torch.mean(self.SAt(fuse_emb), dim=0)
 
-
         # [batches, nodes, hidden_dim, timestamps]
         spatial_gcn = self.GCRNN(x_TAt, spatial_At, delta_t, lengths, graph_input_time_encoding, mask)
 
@@ -2334,6 +2521,8 @@ class ASTGCN_block_GRU_transformer_nufft_3(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class Spatial_Attention_layer_MTGNN(nn.Module):
     def __init__(self, nnodes, k, dim, device, alpha=3, static_feat=None):
         super(Spatial_Attention_layer_MTGNN, self).__init__()
@@ -2345,8 +2534,8 @@ class Spatial_Attention_layer_MTGNN(nn.Module):
         else:
             self.emb1 = nn.Embedding(nnodes, dim)
             self.emb2 = nn.Embedding(nnodes, dim)
-            self.lin1 = nn.Linear(dim,dim)
-            self.lin2 = nn.Linear(dim,dim)
+            self.lin1 = nn.Linear(dim, dim)
+            self.lin2 = nn.Linear(dim, dim)
 
         self.device = device
         self.k = k
@@ -2359,24 +2548,26 @@ class Spatial_Attention_layer_MTGNN(nn.Module):
             nodevec1 = self.emb1(idx)
             nodevec2 = self.emb2(idx)
         else:
-            nodevec1 = self.static_feat[idx,:]
+            nodevec1 = self.static_feat[idx, :]
             nodevec2 = nodevec1
 
-        nodevec1 = torch.tanh(self.alpha*self.lin1(nodevec1))
-        nodevec2 = torch.tanh(self.alpha*self.lin2(nodevec2))
+        nodevec1 = torch.tanh(self.alpha * self.lin1(nodevec1))
+        nodevec2 = torch.tanh(self.alpha * self.lin2(nodevec2))
 
-        a = torch.mm(nodevec1, nodevec2.transpose(1,0))-torch.mm(nodevec2, nodevec1.transpose(1,0))
-        adj = F.relu(torch.tanh(self.alpha*a))
-#        mask = torch.zeros(idx.size(0), idx.size(0)).to(self.device)
-#        mask.fill_(float('0'))
-#        s1,t1 = (adj + torch.rand_like(adj)*0.01).topk(self.k,1)
-#        mask.scatter_(1,t1,s1.fill_(1))
-#        adj = adj*mask
+        a = torch.mm(nodevec1, nodevec2.transpose(1, 0)) - torch.mm(nodevec2, nodevec1.transpose(1, 0))
+        adj = F.relu(torch.tanh(self.alpha * a))
+        #        mask = torch.zeros(idx.size(0), idx.size(0)).to(self.device)
+        #        mask.fill_(float('0'))
+        #        s1,t1 = (adj + torch.rand_like(adj)*0.01).topk(self.k,1)
+        #        mask.scatter_(1,t1,s1.fill_(1))
+        #        adj = adj*mask
         return adj
+
 
 class ASTGCN_block_GRU_transformer_nufft_MTGNN(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer_nufft_MTGNN, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -2395,8 +2586,9 @@ class ASTGCN_block_GRU_transformer_nufft_MTGNN(nn.Module):
         self.SAt = Spatial_Attention_layer_MTGNN(nnodes=num_of_vertices, k=10, dim=64, device=DEVICE)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.attention_d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -2414,6 +2606,7 @@ class ASTGCN_block_GRU_transformer_nufft_MTGNN(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, nufft, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -2421,19 +2614,22 @@ class ASTGCN_block_GRU_transformer_nufft_MTGNN(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
         # x_TAt = temporal_transformer_output
@@ -2450,7 +2646,6 @@ class ASTGCN_block_GRU_transformer_nufft_MTGNN(nn.Module):
         # nufft = self.spectral_projection(nufft[:, 1, :, :].permute(0, 2, 1))
         spatial_At = self.SAt(torch.arange(num_of_vertices).to(self.DEVICE))
 
-
         # [batches, nodes, hidden_dim, timestamps]
         spatial_gcn = self.GCRNN(x_TAt, spatial_At, delta_t, lengths, graph_input_time_encoding, mask)
 
@@ -2464,10 +2659,12 @@ class ASTGCN_block_GRU_transformer_nufft_MTGNN(nn.Module):
             output = self.classifier(torch.squeeze(out))
         return output
 
+
 class Spatial_Attention_layer_Dot_Product_emb(nn.Module):
     '''
     compute spatial attention scores
     '''
+
     def __init__(self, DEVICE, num_of_vertices, num_of_timestamps, d_model):
         super(Spatial_Attention_layer_Dot_Product_emb, self).__init__()
         self.d_model = d_model
@@ -2476,6 +2673,7 @@ class Spatial_Attention_layer_Dot_Product_emb(nn.Module):
         self.fuse_linear = nn.Linear(2 * d_model, d_model)
         self.WK = nn.Parameter(torch.randn(d_model, d_model).to(DEVICE))
         self.WQ = nn.Parameter(torch.randn(d_model, d_model).to(DEVICE))
+
     def forward(self, x):
         '''
         :param x: (batch_size, N, T)
@@ -2497,9 +2695,11 @@ class Spatial_Attention_layer_Dot_Product_emb(nn.Module):
 
         return S_normalized
 
+
 class ASTGCN_block_GRU_transformer_nufft_emb(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer_nufft_emb, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -2516,8 +2716,9 @@ class ASTGCN_block_GRU_transformer_nufft_emb(nn.Module):
                                                            num_of_timesteps, self.attention_d_model)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.attention_d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -2535,6 +2736,7 @@ class ASTGCN_block_GRU_transformer_nufft_emb(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, nufft, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -2542,19 +2744,22 @@ class ASTGCN_block_GRU_transformer_nufft_emb(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
 
@@ -2569,7 +2774,6 @@ class ASTGCN_block_GRU_transformer_nufft_emb(nn.Module):
         # spatial_At = torch.mean(self.SAt(torch.squeeze(fuse_embedding)), dim=0)
         spatial_At = torch.mean(self.SAt(fuse_info), dim=0)
 
-
         # [batches, nodes, hidden_dim, timestamps]
         spatial_gcn = self.GCRNN(x_TAt, spatial_At, delta_t, lengths, graph_input_time_encoding, mask)
 
@@ -2582,9 +2786,12 @@ class ASTGCN_block_GRU_transformer_nufft_emb(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class ASTGCN_block_GRU_transformer14(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer14, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -2599,8 +2806,9 @@ class ASTGCN_block_GRU_transformer14(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps * 2)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -2618,6 +2826,7 @@ class ASTGCN_block_GRU_transformer14(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -2625,26 +2834,31 @@ class ASTGCN_block_GRU_transformer14(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
         # temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,src_key_padding_mask=\
-        (1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)).squeeze(-1).permute(1, 0))
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask= \
+                                                                            (1 - mask.permute(3, 0, 2, 1).reshape(
+                                                                                num_of_timesteps,
+                                                                                batch_size * num_of_vertices,
+                                                                                1)).squeeze(-1).permute(1, 0))
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
-        #x_TAt = temporal_transformer_output
+        # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
 
         ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
         ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
@@ -2668,9 +2882,12 @@ class ASTGCN_block_GRU_transformer14(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class ASTGCN_block_GRU_transformer15(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer15, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -2685,8 +2902,9 @@ class ASTGCN_block_GRU_transformer15(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop_mask_te(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop_mask_te(d_in=self.attention_d_model, d_model=self.graph_node_d_model,
+                                                      d_out=1, n_layers=n_layer,
+                                                      num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -2704,6 +2922,7 @@ class ASTGCN_block_GRU_transformer15(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -2711,26 +2930,28 @@ class ASTGCN_block_GRU_transformer15(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
         transformer_mask = torch.repeat_interleave(transformer_mask.cuda(), num_of_vertices, dim=0)
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
         # temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,src_key_padding_mask=\
         # (1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)).squeeze(-1).permute(1, 0))
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
-        #x_TAt = temporal_transformer_output
+        # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
 
         ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
         ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
@@ -2754,9 +2975,12 @@ class ASTGCN_block_GRU_transformer15(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class ASTGCN_block_GRU_transformer_var_length(nn.Module):
 
-    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static, n_class, n_layer=1, kernel_size=3):
+    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
+                 n_class, n_layer=1, kernel_size=3):
         super(ASTGCN_block_GRU_transformer_var_length, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -2771,8 +2995,9 @@ class ASTGCN_block_GRU_transformer_var_length(nn.Module):
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1, n_layers=n_layer,
-                                   num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop(d_in=self.attention_d_model, d_model=self.graph_node_d_model, d_out=1,
+                                              n_layers=n_layer,
+                                              num_nodes=num_of_vertices, support_len=1, kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -2790,6 +3015,7 @@ class ASTGCN_block_GRU_transformer_var_length(nn.Module):
         self.DEVICE = DEVICE
 
         self.to(DEVICE)
+
     def forward(self, x, var_length, var_last_obs_tp, delta_t, static=None, lengths=0):
         '''
         :param x: (B, N_nodes, F_in, T_in)
@@ -2797,27 +3023,31 @@ class ASTGCN_block_GRU_transformer_var_length(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
-        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1)\
+        temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
-        transformer_mask = (torch.arange(num_of_timesteps)[None, :] >= (var_length.reshape(batch_size * num_of_vertices).cpu()[:, None])).cuda()
+        transformer_mask = (torch.arange(num_of_timesteps)[None, :] >= (
+        var_length.reshape(batch_size * num_of_vertices).cpu()[:, None])).cuda()
         time_encoding = self.time_encoder(step.squeeze(1)[:, 0, :].permute(1, 0))
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
-        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding, num_of_vertices, dim=1)
-        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, src_key_padding_mask=transformer_mask)
+        temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
+                                                                                          num_of_vertices, dim=1)
+        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+                                                                        src_key_padding_mask=transformer_mask)
         # temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,src_key_padding_mask=\
         # (1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)).squeeze(-1).permute(1, 0))
-        temporal_transformer_output = torch.where(torch.isnan(temporal_transformer_output), torch.full_like(temporal_transformer_output, 0),
-                    temporal_transformer_output)
-        temporal_transformer_output = temporal_transformer_output\
+        temporal_transformer_output = torch.where(torch.isnan(temporal_transformer_output),
+                                                  torch.full_like(temporal_transformer_output, 0),
+                                                  temporal_transformer_output)
+        temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
-        #x_TAt = temporal_transformer_output
+        # x_TAt = temporal_transformer_output
         # return x_TAt.permute(0, 2, 1, 3)
-
 
         ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
         ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
@@ -2841,6 +3071,7 @@ class ASTGCN_block_GRU_transformer_var_length(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
 
 class ASTGCN_block_GRU_transformer16(nn.Module):
 
@@ -2909,7 +3140,7 @@ class ASTGCN_block_GRU_transformer16(nn.Module):
 
         temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
-        #        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input, 
+        #        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
         #            src_key_padding_mask=(1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)))
         x_TAt = mask * temporal_observation_embedding + (1 - mask) * temporal_transformer_output
         # x_TAt = temporal_transformer_output
@@ -2926,8 +3157,8 @@ class ASTGCN_block_GRU_transformer16(nn.Module):
 
         spatial_At = torch.mean(self.SAt(torch.squeeze(ffted_length)), dim=0)
 
-        #spatial_At = 0.5 * (spatial_At + spatial_At.T)
-        #        spatial_At_mask = spatial_At < 1 / 36 
+        # spatial_At = 0.5 * (spatial_At + spatial_At.T)
+        #        spatial_At_mask = spatial_At < 1 / 36
         #        spatial_At[spatial_At_mask] = 0
         #        spatial_At[~spatial_At_mask] = spatial_At[~spatial_At_mask] * 3
         # spatial_At = torch.mean(self.SAt(ffted_length), dim=0)
@@ -2944,6 +3175,8 @@ class ASTGCN_block_GRU_transformer16(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class ASTGCN_block_GRU_transformer_nufft_4(nn.Module):
 
     def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
@@ -2960,7 +3193,7 @@ class ASTGCN_block_GRU_transformer_nufft_4(nn.Module):
         self.time_encoder = PositionalEncodingTF(self.attention_d_model, num_of_timesteps, 100)
         self.time_encoder2 = PositionalEncodingTF(self.graph_node_d_model, num_of_timesteps, 100)
         self.SAt = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
-#        self.SAt_p = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
+        #        self.SAt_p = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
         self.GCRNN = GCRNN_epsilon_early_stop_distribution(d_in=self.attention_d_model, d_model=self.graph_node_d_model,
@@ -3018,31 +3251,31 @@ class ASTGCN_block_GRU_transformer_nufft_4(nn.Module):
         #            src_key_padding_mask=(1 - mask.permute(3, 0, 2, 1).reshape(num_of_timesteps, batch_size * num_of_vertices, 1)))
         x_TAt = mask * temporal_transformer_input + (1 - mask) * temporal_transformer_output
 
-#        fre_fuse = torch.cat([torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1)), torch.squeeze(nufft[:, 2, :, :].permute(0, 2, 1))], dim=-1)
-#        spatial_At = torch.mean(self.SAt(torch.squeeze(x)), dim=0)
-#        spatial_At_m = torch.mean(self.SAt_m(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
-#        spatial_At_p = torch.mean(self.SAt_p(torch.squeeze(nufft[:, 2, :, :].permute(0, 2, 1))), dim=0)
+        #        fre_fuse = torch.cat([torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1)), torch.squeeze(nufft[:, 2, :, :].permute(0, 2, 1))], dim=-1)
+        #        spatial_At = torch.mean(self.SAt(torch.squeeze(x)), dim=0)
+        #        spatial_At_m = torch.mean(self.SAt_m(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
+        #        spatial_At_p = torch.mean(self.SAt_p(torch.squeeze(nufft[:, 2, :, :].permute(0, 2, 1))), dim=0)
         spatial_At = torch.mean(self.SAt(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
-#        spatial_At = torch.mean(self.SAt(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1)) * torch.squeeze(nufft[:, 2, :, :].permute(0, 2, 1))), dim=0)
-#        adj_mask_m = torch.zeros_like(spatial_At_m).to(self.DEVICE)
-#        adj_mask_m.fill_(float('0'))
-#        s1, t1 = adj_mask_m.topk(num_of_vertices // 4, -1)
-#        adj_mask_m.scatter_(1, t1, s1.fill_(1))
-#        spatial_At_m = spatial_At_m * adj_mask_m
-#        spatial_At_m = 0.5 * (spatial_At_m + spatial_At_m.T)
-#        
-#        adj_mask_p = torch.zeros_like(spatial_At_p).to(self.DEVICE)
-#        adj_mask_p.fill_(float('0'))
-#        s1, t1 = adj_mask_p.topk(num_of_vertices // 4, -1)
-#        adj_mask_p.scatter_(1, t1, s1.fill_(1))
-#        spatial_At_p = spatial_At_p * adj_mask_p
-#        spatial_At_p = 0.5 * (spatial_At_p + spatial_At_p.T)
-#        
-#        spatial_At = 0.5 * (spatial_At_m + spatial_At_p)
-        
-#        spatial_At = 0.5 * (spatial_At_m + spatial_At_p)
-##        spatial_At = torch.mean(self.SAt(torch.squeeze(x)), dim=0)
-##        spatial_At = 0.5 * (spatial_At + spatial_At.T)
+        #        spatial_At = torch.mean(self.SAt(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1)) * torch.squeeze(nufft[:, 2, :, :].permute(0, 2, 1))), dim=0)
+        #        adj_mask_m = torch.zeros_like(spatial_At_m).to(self.DEVICE)
+        #        adj_mask_m.fill_(float('0'))
+        #        s1, t1 = adj_mask_m.topk(num_of_vertices // 4, -1)
+        #        adj_mask_m.scatter_(1, t1, s1.fill_(1))
+        #        spatial_At_m = spatial_At_m * adj_mask_m
+        #        spatial_At_m = 0.5 * (spatial_At_m + spatial_At_m.T)
+        #
+        #        adj_mask_p = torch.zeros_like(spatial_At_p).to(self.DEVICE)
+        #        adj_mask_p.fill_(float('0'))
+        #        s1, t1 = adj_mask_p.topk(num_of_vertices // 4, -1)
+        #        adj_mask_p.scatter_(1, t1, s1.fill_(1))
+        #        spatial_At_p = spatial_At_p * adj_mask_p
+        #        spatial_At_p = 0.5 * (spatial_At_p + spatial_At_p.T)
+        #
+        #        spatial_At = 0.5 * (spatial_At_m + spatial_At_p)
+
+        #        spatial_At = 0.5 * (spatial_At_m + spatial_At_p)
+        ##        spatial_At = torch.mean(self.SAt(torch.squeeze(x)), dim=0)
+        ##        spatial_At = 0.5 * (spatial_At + spatial_At.T)
         adj_mask = torch.zeros_like(spatial_At).to(self.DEVICE)
         adj_mask.fill_(float('0'))
         s1, t1 = spatial_At.topk(num_of_vertices // 4, -1)
@@ -3050,7 +3283,7 @@ class ASTGCN_block_GRU_transformer_nufft_4(nn.Module):
         spatial_At = spatial_At * adj_mask
         spatial_At = 0.5 * (spatial_At + spatial_At.T)
 
-#        spatial_At = torch.ones(size=[num_of_vertices, num_of_vertices]).to(self.DEVICE) / num_of_vertices
+        #        spatial_At = torch.ones(size=[num_of_vertices, num_of_vertices]).to(self.DEVICE) / num_of_vertices
         # [batches, nodes, hidden_dim, timestamps]
         spatial_gcn = self.GCRNN(x_TAt, spatial_At, delta_t, lengths, graph_input_time_encoding, mask)
 
@@ -3063,6 +3296,8 @@ class ASTGCN_block_GRU_transformer_nufft_4(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class ASTGCN_block_GRU_transformer_nufft_5(nn.Module):
 
     def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
@@ -3144,7 +3379,7 @@ class ASTGCN_block_GRU_transformer_nufft_5(nn.Module):
         phase = F.tanh(self.p_linear(torch.squeeze(nufft[:, 2, :, :].permute(0, 2, 1))))
 
         spatial_At = torch.mean(self.SAt(F.tanh(magnitudes * phase)), dim=0)
-#        spatial_At = torch.mean(self.SAt(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
+        #        spatial_At = torch.mean(self.SAt(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
         spatial_At = 0.5 * (spatial_At + spatial_At.T)
 
         #        spatial_At_mask = spatial_At < 1 / 36
@@ -3164,7 +3399,9 @@ class ASTGCN_block_GRU_transformer_nufft_5(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
-#class ASTGCN_block_GRU_transformer_nufft_tftopk(nn.Module):
+
+
+# class ASTGCN_block_GRU_transformer_nufft_tftopk(nn.Module):
 #
 #    def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
 #                 n_class, n_layer=1, kernel_size=3):
@@ -3245,20 +3482,20 @@ class ASTGCN_block_GRU_transformer_nufft_5(nn.Module):
 #        s1, t1 = spatial_At_f.topk(self.topK // 2, -1)
 #        adj_mask_f.scatter_(1, t1, s1.fill_(1))
 #        spatial_At_f = spatial_At_f * adj_mask_f
-#        
-##        spatial_At_t = spatial_At_t * 
+#
+##        spatial_At_t = spatial_At_t *
 #        adj_mask_t = torch.zeros_like(spatial_At_t).to(self.DEVICE)
 #        adj_mask_t.fill_(float('0'))
 #        s1, t1 = spatial_At_t.topk(self.topK // 2, -1)
 #        adj_mask_t.scatter_(1, t1, s1.fill_(1))
 #        spatial_At_t = spatial_At_t * adj_mask_t
-#        
+#
 #        spatial_At = spatial_At_f + spatial_At_t
 #        spatial_At[torch.where(spatial_At > 0.04)] = spatial_At[torch.where(spatial_At > 0.04)] * 0.5
 #        spatial_At = (spatial_At + spatial_At.T)
 ##        spatial_At[torch.where(spatial_At > 0.04)] = spatial_At[torch.where(spatial_At > 0.04)] * 0.5
 ##        spatial_At = 0.5 * (spatial_At + spatial_At.T)
-#	
+#
 ##        spatial_At = torch.ones(size=[num_of_vertices, num_of_vertices]).to(self.DEVICE) / num_of_vertices
 #        # [batches, nodes, hidden_dim, timestamps]
 #        spatial_gcn = self.GCRNN(x_TAt, spatial_At, delta_t, lengths, graph_input_time_encoding, mask)
@@ -3291,7 +3528,7 @@ class ASTGCN_block_GRU_transformer_nufft_tftopk(nn.Module):
         self.time_encoder2 = PositionalEncodingTF(self.graph_node_d_model, num_of_timesteps, 100)
         self.SAt_time = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         self.SAt_frequency = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
-#        self.SAt_frequency_p = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
+        #        self.SAt_frequency_p = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         #        self.SAt_p = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
@@ -3328,8 +3565,9 @@ class ASTGCN_block_GRU_transformer_nufft_tftopk(nn.Module):
                                                                                                         1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
-        temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
-#        temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
+        temporal_observation_embedding = self.sigma(
+            self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
+        #        temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
         temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
         transformer_mask = torch.arange(num_of_timesteps)[None, :] >= (lengths.cpu()[:, None])
@@ -3340,59 +3578,56 @@ class ASTGCN_block_GRU_transformer_nufft_tftopk(nn.Module):
                                                                                           num_of_vertices, dim=1)
         temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
                                                                         src_key_padding_mask=transformer_mask)
-#
+        #
         temporal_transformer_input = temporal_transformer_input \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
         temporal_transformer_output = temporal_transformer_output \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
-#
+        #
         x_TAt = mask * temporal_transformer_input + (1 - mask) * temporal_transformer_output
-#        x_TAt = temporal_transformer_input
-#        x_TAt = temporal_transformer_output
-#        ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
-#        ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
-#        # ffted_length = torch.sqrt(ffted_real * ffted_real + ffted_imag * ffted_imag).to(
-#        #     torch.float32)  # [batch, variable_num, 1, time]
-#        ffted_length = (ffted_real ** 2 + ffted_imag ** 2) ** 0.5
-#        spatial_At_f = torch.mean(self.SAt_frequency(torch.squeeze(ffted_length)), dim=0)
+        #        x_TAt = temporal_transformer_input
+        #        x_TAt = temporal_transformer_output
+        #        ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
+        #        ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
+        #        # ffted_length = torch.sqrt(ffted_real * ffted_real + ffted_imag * ffted_imag).to(
+        #        #     torch.float32)  # [batch, variable_num, 1, time]
+        #        ffted_length = (ffted_real ** 2 + ffted_imag ** 2) ** 0.5
+        #        spatial_At_f = torch.mean(self.SAt_frequency(torch.squeeze(ffted_length)), dim=0)
 
-#        spatial_At_t = torch.mean(self.SAt_time(torch.squeeze(x)), dim=0)
-#        spatial_At_t = torch.mean(self.SAt_frequency(torch.squeeze(x)), dim=0)
-
+        #        spatial_At_t = torch.mean(self.SAt_time(torch.squeeze(x)), dim=0)
+        #        spatial_At_t = torch.mean(self.SAt_frequency(torch.squeeze(x)), dim=0)
 
         spatial_At_f = torch.mean(self.SAt_frequency(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
 
-        
-#        spatial_At_p = torch.mean(self.SAt_frequency_p(torch.squeeze(nufft[:, 2, :, :].permute(0, 2, 1))), dim=0)
+        #        spatial_At_p = torch.mean(self.SAt_frequency_p(torch.squeeze(nufft[:, 2, :, :].permute(0, 2, 1))), dim=0)
         # spatial_At_t = 0.5 * (spatial_At_t + spatial_At_t.T)
         # spatial_At_f = 0.5 * (spatial_At_f + spatial_At_f.T)
 
+        #        adj_mask_f = torch.zeros_like(spatial_At_f).to(self.DEVICE)
+        #        adj_mask_f.fill_(float('0'))
+        #        s1, t1 = spatial_At_f.topk(self.topK, -1)
+        #        adj_mask_f.scatter_(1, t1, s1.fill_(1))
+        #        spatial_At_f = spatial_At_f * adj_mask_f
 
-#        adj_mask_f = torch.zeros_like(spatial_At_f).to(self.DEVICE)
-#        adj_mask_f.fill_(float('0'))
-#        s1, t1 = spatial_At_f.topk(self.topK, -1)
-#        adj_mask_f.scatter_(1, t1, s1.fill_(1))
-#        spatial_At_f = spatial_At_f * adj_mask_f
-        
-#        adj_mask_t = torch.zeros_like(spatial_At_t).to(self.DEVICE)
-#        adj_mask_t.fill_(float('0'))
-#        s1, t1 = spatial_At_t.topk(self.topK, -1)
-#        adj_mask_t.scatter_(1, t1, s1.fill_(1))
-#        spatial_At_t = spatial_At_t * adj_mask_t
+        #        adj_mask_t = torch.zeros_like(spatial_At_t).to(self.DEVICE)
+        #        adj_mask_t.fill_(float('0'))
+        #        s1, t1 = spatial_At_t.topk(self.topK, -1)
+        #        adj_mask_t.scatter_(1, t1, s1.fill_(1))
+        #        spatial_At_t = spatial_At_t * adj_mask_t
 
-#        adj_mask_p = torch.zeros_like(spatial_At_p).to(self.DEVICE)
-#        adj_mask_p.fill_(float('0'))
-#        s1, t1 = spatial_At_p.topk(self.topK // 3, -1)
-#        adj_mask_p.scatter_(1, t1, s1.fill_(1))
-#        spatial_At_p = spatial_At_p * adj_mask_p * (1 - adj_mask_f) * (1 - adj_mask_t)
-        
+        #        adj_mask_p = torch.zeros_like(spatial_At_p).to(self.DEVICE)
+        #        adj_mask_p.fill_(float('0'))
+        #        s1, t1 = spatial_At_p.topk(self.topK // 3, -1)
+        #        adj_mask_p.scatter_(1, t1, s1.fill_(1))
+        #        spatial_At_p = spatial_At_p * adj_mask_p * (1 - adj_mask_f) * (1 - adj_mask_t)
+
         # spatial_At_t = spatial_At_t * (1 - adj_mask_f)
-#
-#
+        #
+        #
         spatial_At = spatial_At_f
         spatial_At = 0.5 * (spatial_At + spatial_At.T)
         spatial_At = 0.5 * (torch.softmax(spatial_At, dim=-1) + torch.softmax(spatial_At, dim=-1).T)
-#        spatial_At = torch.ones(size=[num_of_vertices, num_of_vertices]).to(self.DEVICE) / num_of_vertices
+        #        spatial_At = torch.ones(size=[num_of_vertices, num_of_vertices]).to(self.DEVICE) / num_of_vertices
 
         # [batches, nodes, hidden_dim, timestamps]
         spatial_gcn = self.GCRNN(x_TAt, spatial_At, delta_t, lengths, graph_input_time_encoding, mask)
@@ -3407,6 +3642,7 @@ class ASTGCN_block_GRU_transformer_nufft_tftopk(nn.Module):
             output = self.classifier(torch.squeeze(out))
         return output
 
+
 class all_ablation(nn.Module):
 
     def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
@@ -3416,22 +3652,23 @@ class all_ablation(nn.Module):
         self.attention_d_model = attention_d_model
         self.graph_node_d_model = graph_node_d_model
         self.input_projection = nn.Conv2d(in_channels=2, out_channels=self.attention_d_model, kernel_size=1, stride=1)
-#        encoder_layers = TransformerEncoderLayer(d_model=self.attention_d_model, nhead=1,
-#                                                 dim_feedforward=self.attention_d_model, dropout=0.3)
-#        self.transformer_encoder_temporal = TransformerEncoder(encoder_layers, 1)
-#        self.topK = 10
+        #        encoder_layers = TransformerEncoderLayer(d_model=self.attention_d_model, nhead=1,
+        #                                                 dim_feedforward=self.attention_d_model, dropout=0.3)
+        #        self.transformer_encoder_temporal = TransformerEncoder(encoder_layers, 1)
+        #        self.topK = 10
         self.time_encoder = PositionalEncodingTF(self.attention_d_model, num_of_timesteps, 100)
         self.time_encoder2 = PositionalEncodingTF(self.graph_node_d_model, num_of_timesteps, 100)
-#        self.SAt_time = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
-#        self.SAt_frequency = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
-#        self.SAt_frequency_p = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
+        #        self.SAt_time = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
+        #        self.SAt_frequency = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
+        #        self.SAt_frequency_p = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         #        self.SAt_p = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         # self.SAt = Spatial_Attention_layer(DEVICE, self.d_model, num_of_vertices, num_of_timesteps)
 
-        self.GCRNN = GCRNN_epsilon_early_stop_distribution_wo_diffusion(d_in=self.attention_d_model, d_model=self.graph_node_d_model,
-                                                           d_out=1, n_layers=n_layer,
-                                                           num_nodes=num_of_vertices, support_len=1,
-                                                           kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop_distribution_wo_diffusion(d_in=self.attention_d_model,
+                                                                        d_model=self.graph_node_d_model,
+                                                                        d_out=1, n_layers=n_layer,
+                                                                        num_nodes=num_of_vertices, support_len=1,
+                                                                        kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -3470,55 +3707,54 @@ class all_ablation(nn.Module):
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
         temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
                                                                                           num_of_vertices, dim=1)
-#        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
-#                                                                        src_key_padding_mask=transformer_mask)
-#
+        #        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+        #                                                                        src_key_padding_mask=transformer_mask)
+        #
         temporal_transformer_input = temporal_transformer_input \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
-#        temporal_transformer_output = temporal_transformer_output \
-#            .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
-#
-#        x_TAt = mask * temporal_transformer_input + (1 - mask) * temporal_transformer_output
+        #        temporal_transformer_output = temporal_transformer_output \
+        #            .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
+        #
+        #        x_TAt = mask * temporal_transformer_input + (1 - mask) * temporal_transformer_output
         x_TAt = temporal_transformer_input
-#        ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
-#        ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
-#        # ffted_length = torch.sqrt(ffted_real * ffted_real + ffted_imag * ffted_imag).to(
-#        #     torch.float32)  # [batch, variable_num, 1, time]
-#        ffted_length = (ffted_real ** 2 + ffted_imag ** 2) ** 0.5
-#        spatial_At = torch.mean(self.SAt_frequency(torch.squeeze(ffted_length)), dim=0)
+        #        ffted_real = torch.fft.fft(x).real  # [batch, variable_num, 1, time]
+        #        ffted_imag = torch.fft.fft(x).imag  # [batch, variable_num, 1, time]
+        #        # ffted_length = torch.sqrt(ffted_real * ffted_real + ffted_imag * ffted_imag).to(
+        #        #     torch.float32)  # [batch, variable_num, 1, time]
+        #        ffted_length = (ffted_real ** 2 + ffted_imag ** 2) ** 0.5
+        #        spatial_At = torch.mean(self.SAt_frequency(torch.squeeze(ffted_length)), dim=0)
 
-#        spatial_At_t = torch.mean(self.SAt_time(torch.squeeze(x)), dim=0)
-#        spatial_At_t = torch.mean(self.SAt_frequency(torch.squeeze(x)), dim=0)
-#        spatial_At_f = torch.mean(self.SAt_frequency(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
-#        spatial_At_p = torch.mean(self.SAt_frequency_p(torch.squeeze(nufft[:, 2, :, :].permute(0, 2, 1))), dim=0)
+        #        spatial_At_t = torch.mean(self.SAt_time(torch.squeeze(x)), dim=0)
+        #        spatial_At_t = torch.mean(self.SAt_frequency(torch.squeeze(x)), dim=0)
+        #        spatial_At_f = torch.mean(self.SAt_frequency(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
+        #        spatial_At_p = torch.mean(self.SAt_frequency_p(torch.squeeze(nufft[:, 2, :, :].permute(0, 2, 1))), dim=0)
         # spatial_At_t = 0.5 * (spatial_At_t + spatial_At_t.T)
         # spatial_At_f = 0.5 * (spatial_At_f + spatial_At_f.T)
 
+        #        adj_mask_f = torch.zeros_like(spatial_At_f).to(self.DEVICE)
+        #        adj_mask_f.fill_(float('0'))
+        #        s1, t1 = spatial_At_f.topk(self.topK, -1)
+        #        adj_mask_f.scatter_(1, t1, s1.fill_(1))
+        #        spatial_At_f = spatial_At_f * adj_mask_f
 
-#        adj_mask_f = torch.zeros_like(spatial_At_f).to(self.DEVICE)
-#        adj_mask_f.fill_(float('0'))
-#        s1, t1 = spatial_At_f.topk(self.topK, -1)
-#        adj_mask_f.scatter_(1, t1, s1.fill_(1))
-#        spatial_At_f = spatial_At_f * adj_mask_f
-        
-#        adj_mask_t = torch.zeros_like(spatial_At_t).to(self.DEVICE)
-#        adj_mask_t.fill_(float('0'))
-#        s1, t1 = spatial_At_t.topk(self.topK, -1)
-#        adj_mask_t.scatter_(1, t1, s1.fill_(1))
-#        spatial_At_t = spatial_At_t * adj_mask_t
+        #        adj_mask_t = torch.zeros_like(spatial_At_t).to(self.DEVICE)
+        #        adj_mask_t.fill_(float('0'))
+        #        s1, t1 = spatial_At_t.topk(self.topK, -1)
+        #        adj_mask_t.scatter_(1, t1, s1.fill_(1))
+        #        spatial_At_t = spatial_At_t * adj_mask_t
 
-#        adj_mask_p = torch.zeros_like(spatial_At_p).to(self.DEVICE)
-#        adj_mask_p.fill_(float('0'))
-#        s1, t1 = spatial_At_p.topk(self.topK // 3, -1)
-#        adj_mask_p.scatter_(1, t1, s1.fill_(1))
-#        spatial_At_p = spatial_At_p * adj_mask_p * (1 - adj_mask_f) * (1 - adj_mask_t)
-        
+        #        adj_mask_p = torch.zeros_like(spatial_At_p).to(self.DEVICE)
+        #        adj_mask_p.fill_(float('0'))
+        #        s1, t1 = spatial_At_p.topk(self.topK // 3, -1)
+        #        adj_mask_p.scatter_(1, t1, s1.fill_(1))
+        #        spatial_At_p = spatial_At_p * adj_mask_p * (1 - adj_mask_f) * (1 - adj_mask_t)
+
         # spatial_At_t = spatial_At_t * (1 - adj_mask_f)
-#
-#
-#        spatial_At = spatial_At_f
-#        spatial_At = 0.5 * (spatial_At + spatial_At.T)
-        
+        #
+        #
+        #        spatial_At = spatial_At_f
+        #        spatial_At = 0.5 * (spatial_At + spatial_At.T)
+
         spatial_At = torch.ones(size=[num_of_vertices, num_of_vertices]).to(self.DEVICE) / num_of_vertices
 
         # [batches, nodes, hidden_dim, timestamps]
@@ -3533,6 +3769,8 @@ class all_ablation(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class ASTGCN_block_GRU_transformer_nufft_fttopk(nn.Module):
 
     def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
@@ -3605,7 +3843,6 @@ class ASTGCN_block_GRU_transformer_nufft_fttopk(nn.Module):
 
         x_TAt = mask * temporal_transformer_input + (1 - mask) * temporal_transformer_output
 
-
         spatial_At_t = torch.mean(self.SAt_time(torch.squeeze(x)), dim=0)
         spatial_At_f = torch.mean(self.SAt_frequency(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
 
@@ -3617,7 +3854,7 @@ class ASTGCN_block_GRU_transformer_nufft_fttopk(nn.Module):
         s1, t1 = spatial_At_t.topk(self.topK // 2, -1)
         adj_mask_t.scatter_(1, t1, s1.fill_(1))
         spatial_At_t = spatial_At_t * adj_mask_t
-        
+
         adj_mask_f = torch.zeros_like(spatial_At_f).to(self.DEVICE)
         adj_mask_f.fill_(float('0'))
         s1, t1 = spatial_At_f.topk(self.topK // 2, -1)
@@ -3625,8 +3862,6 @@ class ASTGCN_block_GRU_transformer_nufft_fttopk(nn.Module):
         spatial_At_f = spatial_At_f * adj_mask_f * (1 - adj_mask_t)
 
         # spatial_At_t = spatial_At_t * (1 - adj_mask_f)
-
-
 
         spatial_At = spatial_At_f + spatial_At_t
         spatial_At = 0.5 * (spatial_At + spatial_At.T)
@@ -3644,6 +3879,8 @@ class ASTGCN_block_GRU_transformer_nufft_fttopk(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class ASTGCN_block_GRU_transformer_nufft_tftopk_wo_diffusion(nn.Module):
 
     def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
@@ -3661,10 +3898,11 @@ class ASTGCN_block_GRU_transformer_nufft_tftopk_wo_diffusion(nn.Module):
         self.time_encoder2 = PositionalEncodingTF(self.graph_node_d_model, num_of_timesteps, 100)
         self.SAt_time = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
         self.SAt_frequency = Spatial_Attention_layer_Dot_Product(DEVICE, num_of_vertices, num_of_timesteps)
-        self.GCRNN = GCRNN_epsilon_early_stop_distribution_wo_diffusion(d_in=self.attention_d_model, d_model=self.graph_node_d_model,
-                                                           d_out=1, n_layers=n_layer,
-                                                           num_nodes=num_of_vertices, support_len=1,
-                                                           kernel_size=kernel_size)
+        self.GCRNN = GCRNN_epsilon_early_stop_distribution_wo_diffusion(d_in=self.attention_d_model,
+                                                                        d_model=self.graph_node_d_model,
+                                                                        d_out=1, n_layers=n_layer,
+                                                                        num_nodes=num_of_vertices, support_len=1,
+                                                                        kernel_size=kernel_size)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -3719,7 +3957,7 @@ class ASTGCN_block_GRU_transformer_nufft_tftopk_wo_diffusion(nn.Module):
         #        #     torch.float32)  # [batch, variable_num, 1, time]
         #        ffted_length = (ffted_real ** 2 + ffted_imag ** 2) ** 0.5
         #        spatial_At = torch.mean(self.SAt_frequency(torch.squeeze(ffted_length)), dim=0)
-        # 
+        #
         # spatial_At_t = torch.mean(self.SAt_time(torch.squeeze(x)), dim=0)
         spatial_At_f = torch.mean(self.SAt_frequency(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
         #        spatial_At_p = torch.mean(self.SAt_frequency_p(torch.squeeze(nufft[:, 2, :, :].permute(0, 2, 1))), dim=0)
@@ -3763,6 +4001,8 @@ class ASTGCN_block_GRU_transformer_nufft_tftopk_wo_diffusion(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class gru_test(nn.Module):
 
     def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
@@ -3801,21 +4041,25 @@ class gru_test(nn.Module):
 
         output = self.classifier(torch.squeeze(h[0]))
         return output
+
+
 class Variable_Attention_layer(nn.Module):
     '''
     compute spatial attention scores
     '''
+
     def __init__(self, DEVICE, num_of_vertices, num_of_timestamps, d_model):
         super(Variable_Attention_layer, self).__init__()
         self.d_model = d_model
         self.WK = nn.Parameter(torch.randn(num_of_timestamps, d_model).to(DEVICE))
         self.WQ = nn.Parameter(torch.randn(num_of_timestamps, d_model).to(DEVICE))
-        #nn.init.xavier_uniform_(self.WK.data, gain=1)
-        #nn.init.xavier_uniform_(self.WQ.data, gain=1)
-        #nn.init.normal_(self.WK, mean=0, std=1)
-        #nn.init.normal_(self.WQ, mean=0, std=1)
-        #nn.init.xavier_normal_(self.WK.data, gain=1)
-        #nn.init.xavier_normal_(self.WQ.data, gain=1)
+        # nn.init.xavier_uniform_(self.WK.data, gain=1)
+        # nn.init.xavier_uniform_(self.WQ.data, gain=1)
+        # nn.init.normal_(self.WK, mean=0, std=1)
+        # nn.init.normal_(self.WQ, mean=0, std=1)
+        # nn.init.xavier_normal_(self.WK.data, gain=1)
+        # nn.init.xavier_normal_(self.WQ.data, gain=1)
+
     def forward(self, x):
         '''
         :param x: (batch_size, N, T)
@@ -3833,10 +4077,12 @@ class Variable_Attention_layer(nn.Module):
         S_normalized = F.softmax(S, dim=-1)
 
         return S_normalized
+
+
 class CGU(nn.Module):
 
     def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
-                 n_class, n_layer=1, kernel_size=3, at=0, bt=0, varatt_dim=0):
+                 n_class, n_layer=1, kernel_size=3, at=0, bt=0, varatt_dim=0, beta_start=1e-5, beta_end=2e-5):
         super(CGU, self).__init__()
         self.num_of_vertices = num_of_vertices
         self.attention_d_model = attention_d_model
@@ -3850,12 +4096,14 @@ class CGU(nn.Module):
         self.topK = 10
         self.time_encoder = PositionalEncodingTF(self.attention_d_model, num_of_timesteps, 100)
         self.time_encoder2 = PositionalEncodingTF(self.graph_node_d_model, num_of_timesteps, 100)
-        self.SAt_time = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps, varatt_dim if varatt_dim!=0 else num_of_timesteps)
-        self.SAt_frequency = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps, varatt_dim if varatt_dim!=0 else num_of_timesteps)
+        self.SAt_time = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps,
+                                                 varatt_dim if varatt_dim != 0 else num_of_timesteps)
+        self.SAt_frequency = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps,
+                                                      varatt_dim if varatt_dim != 0 else num_of_timesteps)
         self.GCRNN = CGRNN(d_in=self.attention_d_model, d_model=self.graph_node_d_model,
-                                                           d_out=1, n_layers=n_layer,
-                                                           num_nodes=num_of_vertices, support_len=1,
-                                                           kernel_size=kernel_size,at=at, bt=bt)
+                           d_out=1, n_layers=n_layer,
+                           num_nodes=num_of_vertices, support_len=1,
+                           kernel_size=kernel_size, at=at, bt=bt, beta_start=beta_start, beta_end=beta_end)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -3885,7 +4133,7 @@ class CGU(nn.Module):
                                                                                                         1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
-#        temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
+        #        temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
         temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
@@ -3904,7 +4152,6 @@ class CGU(nn.Module):
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
 
         x_TAt = mask * temporal_transformer_input + (1 - mask) * temporal_transformer_output
-
 
         # spatial_At_t = torch.mean(self.SAt_time(torch.squeeze(x)), dim=0)
         spatial_At_f = torch.mean(self.SAt_frequency(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
@@ -3944,6 +4191,7 @@ class CGU(nn.Module):
             output = self.classifier(torch.squeeze(out))
         return output
 
+
 class CGU_timevaratt(nn.Module):
 
     def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
@@ -3961,12 +4209,14 @@ class CGU_timevaratt(nn.Module):
         self.topK = 10
         self.time_encoder = PositionalEncodingTF(self.attention_d_model, num_of_timesteps, 100)
         self.time_encoder2 = PositionalEncodingTF(self.graph_node_d_model, num_of_timesteps, 100)
-        self.SAt_time = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps, varatt_dim if varatt_dim!=0 else num_of_timesteps)
-        self.SAt_frequency = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps, varatt_dim if varatt_dim!=0 else num_of_timesteps)
+        self.SAt_time = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps,
+                                                 varatt_dim if varatt_dim != 0 else num_of_timesteps)
+        self.SAt_frequency = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps,
+                                                      varatt_dim if varatt_dim != 0 else num_of_timesteps)
         self.GCRNN = CGRNN(d_in=self.attention_d_model, d_model=self.graph_node_d_model,
-                                                           d_out=1, n_layers=n_layer,
-                                                           num_nodes=num_of_vertices, support_len=1,
-                                                           kernel_size=kernel_size,at=at, bt=bt)
+                           d_out=1, n_layers=n_layer,
+                           num_nodes=num_of_vertices, support_len=1,
+                           kernel_size=kernel_size, at=at, bt=bt)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -3996,7 +4246,7 @@ class CGU_timevaratt(nn.Module):
                                                                                                         1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
-#        temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
+        #        temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
         temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
@@ -4016,9 +4266,8 @@ class CGU_timevaratt(nn.Module):
 
         x_TAt = mask * temporal_transformer_input + (1 - mask) * temporal_transformer_output
 
-
         spatial_At_t = torch.mean(self.SAt_time(torch.squeeze(x)), dim=0)
-#        spatial_At_f = torch.mean(self.SAt_frequency(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
+        #        spatial_At_f = torch.mean(self.SAt_frequency(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
 
         # spatial_At_t = 0.5 * (spatial_At_t + spatial_At_t.T)
         # spatial_At_f = 0.5 * (spatial_At_f + spatial_At_f.T)
@@ -4073,12 +4322,12 @@ class CGU_wovaratt(nn.Module):
         self.topK = 10
         self.time_encoder = PositionalEncodingTF(self.attention_d_model, num_of_timesteps, 100)
         self.time_encoder2 = PositionalEncodingTF(self.graph_node_d_model, num_of_timesteps, 100)
-#        self.SAt_time = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps, varatt_dim if varatt_dim!=0 else num_of_timesteps)
-#        self.SAt_frequency = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps, varatt_dim if varatt_dim!=0 else num_of_timesteps)
+        #        self.SAt_time = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps, varatt_dim if varatt_dim!=0 else num_of_timesteps)
+        #        self.SAt_frequency = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps, varatt_dim if varatt_dim!=0 else num_of_timesteps)
         self.GCRNN = CGRNN(d_in=self.attention_d_model, d_model=self.graph_node_d_model,
-                                                           d_out=1, n_layers=n_layer,
-                                                           num_nodes=num_of_vertices, support_len=1,
-                                                           kernel_size=kernel_size,at=at, bt=bt)
+                           d_out=1, n_layers=n_layer,
+                           num_nodes=num_of_vertices, support_len=1,
+                           kernel_size=kernel_size, at=at, bt=bt)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -4108,7 +4357,7 @@ class CGU_wovaratt(nn.Module):
                                                                                                         1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
-#        temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
+        #        temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
         temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
@@ -4142,7 +4391,6 @@ class CGU_wovaratt(nn.Module):
         return output
 
 
-        
 class CGU_wo_timeatt(nn.Module):
 
     def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
@@ -4153,19 +4401,21 @@ class CGU_wo_timeatt(nn.Module):
         self.graph_node_d_model = graph_node_d_model
         self.input_projection = nn.Conv2d(in_channels=2, out_channels=self.attention_d_model, kernel_size=1, stride=1)
         self.sigma = nn.ReLU()
-#        encoder_layers = TransformerEncoderLayer(d_model=self.attention_d_model, nhead=1,
-#                                                 dim_feedforward=self.attention_d_model, dropout=0.3)
-#        self.transformer_encoder_temporal = TransformerEncoder(encoder_layers, 1)
+        #        encoder_layers = TransformerEncoderLayer(d_model=self.attention_d_model, nhead=1,
+        #                                                 dim_feedforward=self.attention_d_model, dropout=0.3)
+        #        self.transformer_encoder_temporal = TransformerEncoder(encoder_layers, 1)
         self.softmax = nn.Softmax()
         self.topK = 10
         self.time_encoder = PositionalEncodingTF(self.attention_d_model, num_of_timesteps, 100)
         self.time_encoder2 = PositionalEncodingTF(self.graph_node_d_model, num_of_timesteps, 100)
-        self.SAt_time = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps, varatt_dim if varatt_dim!=0 else num_of_timesteps)
-        self.SAt_frequency = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps, varatt_dim if varatt_dim!=0 else num_of_timesteps)
+        self.SAt_time = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps,
+                                                 varatt_dim if varatt_dim != 0 else num_of_timesteps)
+        self.SAt_frequency = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps,
+                                                      varatt_dim if varatt_dim != 0 else num_of_timesteps)
         self.GCRNN = CGRNN(d_in=self.attention_d_model, d_model=self.graph_node_d_model,
-                                                           d_out=1, n_layers=n_layer,
-                                                           num_nodes=num_of_vertices, support_len=1,
-                                                           kernel_size=kernel_size,at=at, bt=bt)
+                           d_out=1, n_layers=n_layer,
+                           num_nodes=num_of_vertices, support_len=1,
+                           kernel_size=kernel_size, at=at, bt=bt)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -4195,7 +4445,7 @@ class CGU_wo_timeatt(nn.Module):
                                                                                                         1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
-#        temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
+        #        temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
         temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
@@ -4205,16 +4455,15 @@ class CGU_wo_timeatt(nn.Module):
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
         temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
                                                                                           num_of_vertices, dim=1)
-#        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
-#                                                                        src_key_padding_mask=transformer_mask)
+        #        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
+        #                                                                        src_key_padding_mask=transformer_mask)
 
         temporal_transformer_input = temporal_transformer_input \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
-#        temporal_transformer_output = temporal_transformer_output \
-#            .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
+        #        temporal_transformer_output = temporal_transformer_output \
+        #            .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
 
         x_TAt = temporal_transformer_input
-
 
         # spatial_At_t = torch.mean(self.SAt_time(torch.squeeze(x)), dim=0)
         spatial_At_f = torch.mean(self.SAt_frequency(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
@@ -4253,7 +4502,8 @@ class CGU_wo_timeatt(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
-        
+
+
 class CGU_small(nn.Module):
 
     def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
@@ -4271,12 +4521,14 @@ class CGU_small(nn.Module):
         self.topK = 10
         self.time_encoder = PositionalEncodingTF(self.attention_d_model, num_of_timesteps, 100)
         self.time_encoder2 = PositionalEncodingTF(self.graph_node_d_model, num_of_timesteps, 100)
-        self.SAt_time = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps, varatt_dim if varatt_dim!=0 else num_of_timesteps)
-        self.SAt_frequency = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps, varatt_dim if varatt_dim!=0 else num_of_timesteps)
+        self.SAt_time = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps,
+                                                 varatt_dim if varatt_dim != 0 else num_of_timesteps)
+        self.SAt_frequency = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps,
+                                                      varatt_dim if varatt_dim != 0 else num_of_timesteps)
         self.GCRNN = CGRNN(d_in=self.attention_d_model, d_model=self.graph_node_d_model,
-                                                           d_out=1, n_layers=n_layer,
-                                                           num_nodes=num_of_vertices, support_len=1,
-                                                           kernel_size=kernel_size,at=at, bt=bt)
+                           d_out=1, n_layers=n_layer,
+                           num_nodes=num_of_vertices, support_len=1,
+                           kernel_size=kernel_size, at=at, bt=bt)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -4302,7 +4554,8 @@ class CGU_small(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         # temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
@@ -4331,6 +4584,8 @@ class CGU_small(nn.Module):
         else:
             output = self.classifier(torch.squeeze(out))
         return output
+
+
 class CGU_wo_interval(nn.Module):
 
     def __init__(self, DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, d_static,
@@ -4348,12 +4603,14 @@ class CGU_wo_interval(nn.Module):
         self.topK = 10
         self.time_encoder = PositionalEncodingTF(self.attention_d_model, num_of_timesteps, 100)
         self.time_encoder2 = PositionalEncodingTF(self.graph_node_d_model, num_of_timesteps, 100)
-        self.SAt_time = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps, varatt_dim if varatt_dim!=0 else num_of_timesteps)
-        self.SAt_frequency = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps, varatt_dim if varatt_dim!=0 else num_of_timesteps)
+        self.SAt_time = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps,
+                                                 varatt_dim if varatt_dim != 0 else num_of_timesteps)
+        self.SAt_frequency = Variable_Attention_layer(DEVICE, num_of_vertices, num_of_timesteps,
+                                                      varatt_dim if varatt_dim != 0 else num_of_timesteps)
         self.GCRNN = CGRNN_wo_interval(d_in=self.attention_d_model, d_model=self.graph_node_d_model,
-                                                           d_out=1, n_layers=n_layer,
-                                                           num_nodes=num_of_vertices, support_len=1,
-                                                           kernel_size=kernel_size,at=at, bt=bt)
+                                       d_out=1, n_layers=n_layer,
+                                       num_nodes=num_of_vertices, support_len=1,
+                                       kernel_size=kernel_size, at=at, bt=bt)
 
         self.final_conv = nn.Conv2d(graph_node_d_model, 1, kernel_size=1)
         self.d_static = d_static
@@ -4379,7 +4636,8 @@ class CGU_wo_interval(nn.Module):
         '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
-        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2, 1).unsqueeze(1)
+        step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
+                                                                                                        1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
         # temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
@@ -4401,7 +4659,6 @@ class CGU_wo_interval(nn.Module):
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
 
         x_TAt = mask * temporal_transformer_input + (1 - mask) * temporal_transformer_output
-
 
         # spatial_At_t = torch.mean(self.SAt_time(torch.squeeze(x)), dim=0)
         spatial_At_f = torch.mean(self.SAt_frequency(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
@@ -4441,24 +4698,32 @@ class CGU_wo_interval(nn.Module):
             output = self.classifier(torch.squeeze(out))
         return output
 
-def make_model(DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, n_layer, kernel_size, d_static, n_class, ablation):
+
+def make_model(DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps, n_layer, kernel_size,
+               d_static, n_class, ablation):
     if ablation == 'full':
-#        model = gru_test(DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps,
-#                                         d_static, n_class, n_layer, kernel_size)
-#        model = all_ablation(DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps,
-#                                         d_static, n_class, n_layer, kernel_size)
-        model = ASTGCN_block_GRU_transformer_nufft_tftopk(DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps,
-                                         d_static, n_class, n_layer, kernel_size)
+        #        model = gru_test(DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps,
+        #                                         d_static, n_class, n_layer, kernel_size)
+        #        model = all_ablation(DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps,
+        #                                         d_static, n_class, n_layer, kernel_size)
+        model = ASTGCN_block_GRU_transformer_nufft_tftopk(DEVICE, attention_d_model, graph_node_d_model,
+                                                          num_of_vertices, num_of_timesteps,
+                                                          d_static, n_class, n_layer, kernel_size)
     elif ablation == 'wo_temporal_attention':
-        model = ASTGCN_block_GRU_transformer_wo_temporal_attention(DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps,
-                                         d_static, n_class, n_layer, kernel_size)
+        model = ASTGCN_block_GRU_transformer_wo_temporal_attention(DEVICE, attention_d_model, graph_node_d_model,
+                                                                   num_of_vertices, num_of_timesteps,
+                                                                   d_static, n_class, n_layer, kernel_size)
     elif ablation == 'wo_frequency_variable_attention':
-        model = ASTGCN_block_GRU_transformer_wo_frequency_variable_attention(DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps,
-                                         d_static, n_class, n_layer, kernel_size)
+        model = ASTGCN_block_GRU_transformer_wo_frequency_variable_attention(DEVICE, attention_d_model,
+                                                                             graph_node_d_model, num_of_vertices,
+                                                                             num_of_timesteps,
+                                                                             d_static, n_class, n_layer, kernel_size)
     elif ablation == 'wo_variable_attention':
-        model = ASTGCN_block_GRU_transformer_wo_variable_attention(DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps,
-                                         d_static, n_class, n_layer, kernel_size)
+        model = ASTGCN_block_GRU_transformer_wo_variable_attention(DEVICE, attention_d_model, graph_node_d_model,
+                                                                   num_of_vertices, num_of_timesteps,
+                                                                   d_static, n_class, n_layer, kernel_size)
     elif ablation == 'wo_time_interval_modeling':
-        model = ASTGCN_block_GRU_transformer_nufft_tftopk_wo_diffusion(DEVICE, attention_d_model, graph_node_d_model, num_of_vertices, num_of_timesteps,
-                                         d_static, n_class, n_layer, kernel_size)
+        model = ASTGCN_block_GRU_transformer_nufft_tftopk_wo_diffusion(DEVICE, attention_d_model, graph_node_d_model,
+                                                                       num_of_vertices, num_of_timesteps,
+                                                                       d_static, n_class, n_layer, kernel_size)
     return model

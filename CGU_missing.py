@@ -10,6 +10,12 @@ parser.add_argument('--batch_size', type=int, default=96) #
 parser.add_argument('--lr', type=float, default=1e-3) #
 parser.add_argument('--attention_d_model', type=int, default=128) #
 parser.add_argument('--graph_node_d_model', type=int, default=64) #
+parser.add_argument('--early_stop_epochs', type=int, default=5) #
+parser.add_argument('--varatt_dim', type=int, default=0) #
+parser.add_argument('--at', type=float, default=0)  #
+parser.add_argument('--bt', type=float, default=0)  #
+parser.add_argument('--beta_start', type=float, default=1e-5)  #
+parser.add_argument('--beta_end', type=float, default=2e-5)  #
 parser.add_argument('--kernel_size', type=int, default=3) #
 parser.add_argument('--n_layer', type=int, default=1) #
 parser.add_argument('--withmissingratio', default=False, help='if True, missing ratio ranges from 0 to 0.5; if False, missing ratio =0') #
@@ -30,7 +36,7 @@ import torch
 import time
 from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, average_precision_score, precision_score, recall_score, f1_score
 # from utils_rd import *
-from ASTGCN_r import *
+from cru_model import *
 import warnings
 from utils import *
 warnings.filterwarnings("ignore")
@@ -88,38 +94,43 @@ sensor_wise_mask = False
 
 for missing_ratio in missing_ratios:
     learning_rate = args.lr  # 0.001 works slightly better, sometimes 0.0001 better, depends on settings and datasets
-    warm_up_epochs = -1
-    at = 0
-    bt = 0
-    varatt_dim = 0
+    at = args.at
+    bt = args.bt
+    varatt_dim = args.varatt_dim
+    num_epochs = args.epochs
+    early_stop_epochs = args.early_stop_epochs
+    attention_d_model = args.attention_d_model
+    graph_node_d_model = args.graph_node_d_model
+    beta_start = args.beta_start
+    beta_end = args.beta_end
     if args.dataset == 'physionet':
         variables_num = 36
         d_static = 9
         timestamp_num = 215
         n_class = 2
-        num_epochs = 20
-        early_stop_epochs = 20
-        attention_d_model = 128
-        graph_node_d_model = 64
+        # num_epochs = 20
+        # early_stop_epochs = 20
+        # attention_d_model = 128
+        # graph_node_d_model = 64
     elif args.dataset == 'P12':
         variables_num = 36
         d_static = 9
         timestamp_num = 215
         n_class = 2
-        num_epochs = 20
-        early_stop_epochs = 20
-        attention_d_model = 64
-        graph_node_d_model = 32
+        # num_epochs = 20
+        # early_stop_epochs = 20
+        # attention_d_model = 64
+        # graph_node_d_model = 32
     elif args.dataset == 'P19':
         d_static = 6
         variables_num = 34
         timestamp_num = 60
         n_class = 2
-        num_epochs = 20
-        early_stop_epochs = 5
-        varatt_dim = 256
-        attention_d_model = 128
-        graph_node_d_model = 64
+        # num_epochs = 20
+        # early_stop_epochs = 5
+        # varatt_dim = 256
+        # attention_d_model = 128
+        # graph_node_d_model = 64
 #    elif args.dataset == 'PAM':
 #        d_static = 0
 #        variables_num = 17
@@ -207,22 +218,21 @@ for missing_ratio in missing_ratios:
             mf, stdf = getStats(Ptrain_tensor)
             ms, ss = getStats_static(Ptrain_static_tensor, dataset=dataset)
 
-            if args.missingtype == 'time':
-                Ptrain_tensor, Ptrain_fft_tensor, Ptrain_static_tensor, Ptrain_delta_t_tensor, Ptrain_length_tensor, Ptrain_time_tensor, ytrain_tensor \
-                    = tensorize_normalize_with_nufft_misssing(Ptrain, ytrain, mf, stdf, ms, ss, args.missingtype, missing_ratio, idx = None)
-                Pval_tensor, Pval_fft_tensor, Pval_static_tensor, Pval_delta_t_tensor, Pval_length_tensor, Pval_time_tensor, yval_tensor \
-                    = tensorize_normalize_with_nufft_misssing(Pval, yval, mf, stdf, ms, ss, args.missingtype, missing_ratio, idx = None)
-                Ptest_tensor, Ptest_fft_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
-                    = tensorize_normalize_with_nufft_misssing(Ptest, ytest, mf, stdf, ms, ss, args.missingtype, missing_ratio, idx = None)
-            elif args.missingtype == 'variable':
-                idx = np.sort(
-                    np.random.choice(variables_num, round((1 - missing_ratio) * variables_num), replace=False))
-                Ptrain_tensor, Ptrain_fft_tensor, Ptrain_static_tensor, Ptrain_delta_t_tensor, Ptrain_length_tensor, Ptrain_time_tensor, ytrain_tensor \
-                    = tensorize_normalize_with_nufft(Ptrain, ytrain, mf, stdf, ms, ss, None)
-                Pval_tensor, Pval_fft_tensor, Pval_static_tensor, Pval_delta_t_tensor, Pval_length_tensor, Pval_time_tensor, yval_tensor \
-                    = tensorize_normalize_with_nufft(Pval, yval, mf, stdf, ms, ss, None)
-                Ptest_tensor, Ptest_fft_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
-                    = tensorize_normalize_with_nufft_misssing(Ptest, ytest, mf, stdf, ms, ss,  args.missingtype, missing_ratio, idx=idx)
+            Ptrain_tensor, Ptrain_fft_tensor, Ptrain_static_tensor, Ptrain_delta_t_tensor, Ptrain_length_tensor, Ptrain_time_tensor, ytrain_tensor \
+                = tensorize_normalize_with_nufft_misssing(Ptrain, ytrain, mf, stdf, ms, ss, args.missingtype, missing_ratio, idx = None)
+            Pval_tensor, Pval_fft_tensor, Pval_static_tensor, Pval_delta_t_tensor, Pval_length_tensor, Pval_time_tensor, yval_tensor \
+                = tensorize_normalize_with_nufft_misssing(Pval, yval, mf, stdf, ms, ss, args.missingtype, missing_ratio, idx = None)
+            Ptest_tensor, Ptest_fft_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
+                = tensorize_normalize_with_nufft_misssing(Ptest, ytest, mf, stdf, ms, ss, args.missingtype, missing_ratio, idx = None)
+            # elif args.missingtype == 'variable':
+            #     idx = np.sort(
+            #         np.random.choice(variables_num, round((1 - missing_ratio) * variables_num), replace=False))
+            #     Ptrain_tensor, Ptrain_fft_tensor, Ptrain_static_tensor, Ptrain_delta_t_tensor, Ptrain_length_tensor, Ptrain_time_tensor, ytrain_tensor \
+            #         = tensorize_normalize_with_nufft(Ptrain, ytrain, mf, stdf, ms, ss, None)
+            #     Pval_tensor, Pval_fft_tensor, Pval_static_tensor, Pval_delta_t_tensor, Pval_length_tensor, Pval_time_tensor, yval_tensor \
+            #         = tensorize_normalize_with_nufft(Pval, yval, mf, stdf, ms, ss, None)
+            #     Ptest_tensor, Ptest_fft_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
+            #         = tensorize_normalize_with_nufft_misssing(Ptest, ytest, mf, stdf, ms, ss,  args.missingtype, missing_ratio, idx=idx)
 
 
         elif dataset == 'PAM':
@@ -236,35 +246,35 @@ for missing_ratio in missing_ratios:
             Ptrain_static_tensor = np.zeros((len(Ptrain), D))
 
             mf, stdf = getStats(Ptrain)
-            if args.missingtype == 'time':
-                Ptrain_tensor, Ptrain_fft_tensor, Ptrain_static_tensor, Ptrain_delta_t_tensor, Ptrain_length_tensor, Ptrain_time_tensor, ytrain_tensor \
-                    = tensorize_normalize_other_missing_with_nufft(Ptrain, ytrain, mf, stdf, missingtype=args.missingtype,
-                                                        missingratio=missing_ratio, idx=idx)
-                Pval_tensor, Pval_fft_tensor, Pval_static_tensor, Pval_delta_t_tensor, Pval_length_tensor, Pval_time_tensor, yval_tensor \
-                    = tensorize_normalize_other_missing_with_nufft(Pval, yval, mf, stdf, missingtype=args.missingtype,
-                                                        missingratio=missing_ratio, idx=idx)
-                Ptest_tensor, Ptest_fft_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
-                    = tensorize_normalize_other_missing_with_nufft(Ptest, ytest, mf, stdf, missingtype=args.missingtype,
-                                                        missingratio=missing_ratio, idx=idx)
-            elif args.missingtype == 'variable':
-                idx = np.sort(
-                    np.random.choice(variables_num, round((1 - missing_ratio) * variables_num), replace=False))
-                Ptrain_tensor, Ptrain_fft_tensor, Ptrain_static_tensor, Ptrain_delta_t_tensor, Ptrain_length_tensor, Ptrain_time_tensor, ytrain_tensor \
-                    = tensorize_normalize_other_missing_with_nufft(Ptrain, ytrain, mf, stdf, missingtype=args.missingtype,
-                                                        missingratio=0, idx=idx)
-                Pval_tensor, Pval_fft_tensor, Pval_static_tensor, Pval_delta_t_tensor, Pval_length_tensor, Pval_time_tensor, yval_tensor \
-                    = tensorize_normalize_other_missing_with_nufft(Pval, yval, mf, stdf, missingtype=args.missingtype,
-                                                        missingratio=0, idx=idx)
-                Ptest_tensor, Ptest_fft_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
-                    = tensorize_normalize_other_missing_with_nufft(Ptest, ytest, mf, stdf, missingtype=args.missingtype,
-                                                        missingratio=missing_ratio, idx=idx)
+            # if args.missingtype == 'time':
+            Ptrain_tensor, Ptrain_fft_tensor, Ptrain_static_tensor, Ptrain_delta_t_tensor, Ptrain_length_tensor, Ptrain_time_tensor, ytrain_tensor \
+                = tensorize_normalize_other_missing_with_nufft(Ptrain, ytrain, mf, stdf, missingtype=args.missingtype,
+                                                    missingratio=missing_ratio, idx=idx)
+            Pval_tensor, Pval_fft_tensor, Pval_static_tensor, Pval_delta_t_tensor, Pval_length_tensor, Pval_time_tensor, yval_tensor \
+                = tensorize_normalize_other_missing_with_nufft(Pval, yval, mf, stdf, missingtype=args.missingtype,
+                                                    missingratio=missing_ratio, idx=idx)
+            Ptest_tensor, Ptest_fft_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
+                = tensorize_normalize_other_missing_with_nufft(Ptest, ytest, mf, stdf, missingtype=args.missingtype,
+                                                    missingratio=missing_ratio, idx=idx)
+            # elif args.missingtype == 'variable':
+            #     idx = np.sort(
+            #         np.random.choice(variables_num, round((1 - missing_ratio) * variables_num), replace=False))
+            #     Ptrain_tensor, Ptrain_fft_tensor, Ptrain_static_tensor, Ptrain_delta_t_tensor, Ptrain_length_tensor, Ptrain_time_tensor, ytrain_tensor \
+            #         = tensorize_normalize_other_missing_with_nufft(Ptrain, ytrain, mf, stdf, missingtype=args.missingtype,
+            #                                             missingratio=0, idx=idx)
+            #     Pval_tensor, Pval_fft_tensor, Pval_static_tensor, Pval_delta_t_tensor, Pval_length_tensor, Pval_time_tensor, yval_tensor \
+            #         = tensorize_normalize_other_missing_with_nufft(Pval, yval, mf, stdf, missingtype=args.missingtype,
+            #                                             missingratio=0, idx=idx)
+            #     Ptest_tensor, Ptest_fft_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
+            #         = tensorize_normalize_other_missing_with_nufft(Ptest, ytest, mf, stdf, missingtype=args.missingtype,
+            #                                             missingratio=missing_ratio, idx=idx)
 
 
         # model = make_model(DEVICE=device, attention_d_model=args.attention_d_model, graph_node_d_model=args.graph_node_d_model,
         #                    num_of_vertices=variables_num, num_of_timesteps=timestamp_num, n_layer=args.n_layer,
         #                    kernel_size=args.kernel_size, d_static=d_static, n_class=n_class, ablation=args.ablation)
         model = CGU(device, attention_d_model, graph_node_d_model, variables_num, timestamp_num,
-                                         d_static, n_class, args.n_layer, args.kernel_size, at=at, bt=bt, varatt_dim=varatt_dim)
+                                         d_static, n_class, args.n_layer, args.kernel_size, at=at, bt=bt, varatt_dim=varatt_dim, beta_start=beta_start, beta_end=beta_end)
         params = (list(model.parameters()))
 
         print('model', model)

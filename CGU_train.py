@@ -1,47 +1,76 @@
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', type=str, default='P12', choices=['P12', 'P19', 'PAM', 'physionet', 'mimic3']) #
-parser.add_argument('--cuda', type=str, default='0') #
-parser.add_argument('--epochs', type=int, default=20) #
-parser.add_argument('--batch_size', type=int, default=64) #
-parser.add_argument('--lr', type=float, default=1e-3) #
-parser.add_argument('--withmissingratio', default=False, help='if True, missing ratio ranges from 0 to 0.5; if False, missing ratio =0') #
-parser.add_argument('--splittype', type=str, default='random', choices=['random', 'age', 'gender'], help='only use for P12 and P19')
-parser.add_argument('--reverse', default=False, help='if True,use female, older for tarining; if False, use female or younger for training') #
+parser.add_argument('--dataset', type=str, default='physionet', choices=['P12', 'P19', 'PAM', 'physionet', 'mimic3'])  #
+parser.add_argument('--cuda', type=str, default='0')  #
+parser.add_argument('--epochs', type=int, default=10)  #
+parser.add_argument('--early_stop_epochs', type=int, default=10)  #
+parser.add_argument('--batch_size', type=int, default=32)  #
+parser.add_argument('--varatt_dim', type=int, default=0)  #
+parser.add_argument('--lr', type=float, default=1e-3)  #
+parser.add_argument('--at', type=float, default=0)  #
+parser.add_argument('--bt', type=float, default=0)  #
+parser.add_argument('--attention_d_model', type=int, default=16)  #
+parser.add_argument('--graph_node_d_model', type=int, default=8)  #
+parser.add_argument('--kernel_size', type=int, default=3)  #
+parser.add_argument('--n_layer', type=int, default=1)  #
+parser.add_argument('--withmissingratio', default=False,
+                    help='if True, missing ratio ranges from 0 to 0.5; if False, missing ratio =0')  #
+parser.add_argument('--splittype', type=str, default='random', choices=['random', 'age', 'gender'],
+                    help='only use for P12 and P19')
+parser.add_argument('--ablation', type=str, default='full',
+                    choices=['full', 'wo_temporal_attention', 'wo_frequency_variable_attention',
+                             'wo_variable_attention', 'wo_time_interval_modeling'])
+
+parser.add_argument('--reverse', default=False,
+                    help='if True,use female, older for tarining; if False, use female or younger for training')  #
 parser.add_argument('--feature_removal_level', type=str, default='no_removal', choices=['no_removal', 'set', 'sample'],
-                    help='use this only when splittype==random; otherwise, set as no_removal') #
+                    help='use this only when splittype==random; otherwise, set as no_removal')  #
 parser.add_argument('--predictive_label', type=str, default='mortality', choices=['mortality', 'LoS'],
                     help='use this only with P12 dataset (mortality or length of stay)')
 args, unknown = parser.parse_known_args()
 print(args)
 import os
+
 os.environ['CUDA_VISIBLE_DEVICES'] = args.cuda
+import torch
 import time
-from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, average_precision_score, precision_score, recall_score, f1_score
+from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, average_precision_score, \
+    precision_score, recall_score, f1_score
 # from utils_rd import *
-from ASTGCN_r import *
+from cru_model import *
 import warnings
 from utils import *
+
 warnings.filterwarnings("ignore")
 wandb = False
 device = torch.device(
-        'cuda:0' if torch.cuda.is_available() else 'cpu')
+    'cuda:0' if torch.cuda.is_available() else 'cpu')
 print(torch.__version__)
 print(torch.cuda.is_available())
-sign = 2
+sign = 88
 torch.manual_seed(1)
-arch = 'mymodel41'
+torch.cuda.manual_seed(1)
+np.random.seed(1)
+torch.backends.cudnn.benchmark = False
+torch.backends.cudnn.deterministic = True
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+torch.use_deterministic_algorithms(True)
+arch = 'mymodelnufft0506'
 model_path = 'models/'
 
 dataset = args.dataset
 print('Dataset used: ', dataset)
+
+
 def one_hot(y_):
     y_ = y_.reshape(len(y_))
 
     y_ = [int(x) for x in y_]
     n_values = np.max(y_) + 1
     return np.eye(n_values)[np.array(y_, dtype=np.int32)]
+
+
 if dataset == 'P12':
     base_path = 'data/P12data'
 elif dataset == 'physionet':
@@ -52,7 +81,6 @@ elif dataset == 'mimiciii':
     base_path = 'data/MIMIC-III'
 elif dataset == 'PAM':
     base_path = 'data/PAMdata'
-
 
 baseline = False  # always False for Raindrop
 split = args.splittype  # possible values: 'random', 'age', 'gender'
@@ -72,30 +100,51 @@ print('missing ratio list', missing_ratios)
 sensor_wise_mask = False
 
 for missing_ratio in missing_ratios:
-    num_epochs = args.epochs
     learning_rate = args.lr  # 0.001 works slightly better, sometimes 0.0001 better, depends on settings and datasets
-    warm_up_epochs = -1
-    if args.dataset == 'P12' or args.dataset == 'physionet':
+    at = args.at
+    bt = args.bt
+    num_epochs = args.epochs
+    early_stop_epochs = args.early_stop_epochs
+    attention_d_model = args.attention_d_model
+    graph_node_d_model = args.graph_node_d_model
+    varatt_dim = args.varatt_dim
+    if args.dataset == 'physionet':
         variables_num = 36
-        # timestamp_num = 160
         d_static = 9
         timestamp_num = 215
         n_class = 2
+    elif args.dataset == 'P12':
+        variables_num = 36
+        d_static = 9
+        timestamp_num = 215
+        n_class = 2
+        # num_epochs = 10
+        # early_stop_epochs = 5
+        # attention_d_model = 128
+        # graph_node_d_model = 64
     elif args.dataset == 'P19':
         d_static = 6
         variables_num = 34
         timestamp_num = 60
         n_class = 2
+        # num_epochs = 10
+        # early_stop_epochs = 5
+        # varatt_dim = 256
+        # attention_d_model = 128
+        # graph_node_d_model = 64
     elif args.dataset == 'PAM':
         d_static = 0
         variables_num = 17
         timestamp_num = 600
         n_class = 8
-    elif args.dataset == 'mimic3':
-        variables_num = 12
-        timestamp_num = 200
-        n_class = 2
-
+        # num_epochs = 20
+        # early_stop_epochs = 20
+        # at = 1 - 1e-6
+        # bt = 1e-3
+        # attention_d_model = 64
+        # graph_node_d_model = 32
+        # learning_rate = 0.005
+        # batch_size = 128
 
     aggreg = 'mean'
 
@@ -131,7 +180,8 @@ for missing_ratio in missing_ratios:
 
         # prepare the data:
         if dataset != 'mimic3':
-            Ptrain, Pval, Ptest, ytrain, yval, ytest = get_data_split(base_path, split_path, split_type=split, reverse=reverse,
+            Ptrain, Pval, Ptest, ytrain, yval, ytest = get_data_split(base_path, split_path, split_type=split,
+                                                                      reverse=reverse,
                                                                       baseline=baseline, dataset=dataset,
                                                                       predictive_label=args.predictive_label)
             print(len(Ptrain), len(Pval), len(Ptest), len(ytrain), len(yval), len(ytest))
@@ -150,11 +200,12 @@ for missing_ratio in missing_ratios:
             mf, stdf = getStats(Ptrain_tensor)
             ms, ss = getStats_static(Ptrain_static_tensor, dataset=dataset)
 
-            Ptrain_tensor, Ptrain_static_tensor, Ptrain_delta_t_tensor, Ptrain_length_tensor, Ptrain_time_tensor, ytrain_tensor = tensorize_normalize(Ptrain, ytrain, mf,
-                                                                                                         stdf, ms, ss, None)
-            Pval_tensor, Pval_static_tensor, Pval_delta_t_tensor, Pval_length_tensor, Pval_time_tensor, yval_tensor = tensorize_normalize(Pval, yval, mf, stdf, ms, ss, None)
-            Ptest_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor = tensorize_normalize(Ptest, ytest, mf, stdf, ms,
-                                                                                              ss, None)
+            Ptrain_tensor, Ptrain_fft_tensor, Ptrain_static_tensor, Ptrain_delta_t_tensor, Ptrain_length_tensor, Ptrain_time_tensor, ytrain_tensor \
+                = tensorize_normalize_with_nufft(Ptrain, ytrain, mf, stdf, ms, ss, None)
+            Pval_tensor, Pval_fft_tensor, Pval_static_tensor, Pval_delta_t_tensor, Pval_length_tensor, Pval_time_tensor, yval_tensor \
+                = tensorize_normalize_with_nufft(Pval, yval, mf, stdf, ms, ss, None)
+            Ptest_tensor, Ptest_fft_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
+                = tensorize_normalize_with_nufft(Ptest, ytest, mf, stdf, ms, ss, None)
         elif dataset == 'PAM':
             T, F = Ptrain[0].shape
             D = 1
@@ -163,41 +214,41 @@ for missing_ratio in missing_ratios:
             Ptrain_static_tensor = np.zeros((len(Ptrain), D))
 
             mf, stdf = getStats(Ptrain)
-            Ptrain_tensor, Ptrain_static_tensor, Ptrain_delta_t_tensor, Ptrain_length_tensor, Ptrain_time_tensor, ytrain_tensor = tensorize_normalize_other(Ptrain, ytrain, mf, stdf)
-            Pval_tensor, Pval_static_tensor, Pval_delta_t_tensor, Pval_length_tensor, Pval_time_tensor, yval_tensor = tensorize_normalize_other(Pval, yval, mf, stdf)
-            Ptest_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor = tensorize_normalize_other(Ptest, ytest, mf, stdf)
+            Ptrain_tensor, Ptrain_fft_tensor, Ptrain_static_tensor, Ptrain_delta_t_tensor, Ptrain_length_tensor, Ptrain_time_tensor, ytrain_tensor \
+                = tensorize_normalize_other_with_nufft(Ptrain, ytrain, mf, stdf)
+            Pval_tensor, Pval_fft_tensor, Pval_static_tensor, Pval_delta_t_tensor, Pval_length_tensor, Pval_time_tensor, yval_tensor \
+                = tensorize_normalize_other_with_nufft(Pval, yval, mf, stdf)
+            Ptest_tensor, Ptest_fft_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
+                = tensorize_normalize_other_with_nufft(Ptest, ytest, mf, stdf)
         elif dataset == 'mimic3':
             data_objects = get_mimiciii_data(batch_size=batch_size, split=k)
             train_dataloader = data_objects['train_dataloader']
             val_dataloader = data_objects['val_dataloader']
             test_dataloader = data_objects['test_dataloader']
 
+        # model = make_model(DEVICE=device, attention_d_model=args.attention_d_model, graph_node_d_model=args.graph_node_d_model,
+        #                    num_of_vertices=variables_num, num_of_timesteps=timestamp_num, n_layer=args.n_layer,
+        #                    kernel_size=args.kernel_size, d_static=d_static, n_class=n_class, ablation=args.ablation,
+        #        #                    at=at, bt=bt, varatt_dim=varatt_dim)
+        #        model = CGU_wovaratt(device, attention_d_model, graph_node_d_model, variables_num, timestamp_num,
+        #                                         d_static, n_class, args.n_layer, args.kernel_size, at=at, bt=bt, varatt_dim=varatt_dim)
+        model = CGU(device, attention_d_model, graph_node_d_model, variables_num, timestamp_num,
+                    d_static, n_class, args.n_layer, args.kernel_size, at=at, bt=bt, varatt_dim=varatt_dim)
+        #        model = CGU_small(device, attention_d_model, graph_node_d_model, variables_num, timestamp_num,
+        #                                         d_static, n_class, args.n_layer, args.kernel_size, at=at, bt=bt, varatt_dim=varatt_dim)
+        #        model = CGU_wo_timeatt(device, attention_d_model, graph_node_d_model, variables_num, timestamp_num,
+        #                                         d_static, n_class, args.n_layer, args.kernel_size, at=at, bt=bt, varatt_dim=varatt_dim)
+        #        model = CGU_wovaratt(device, attention_d_model, graph_node_d_model, variables_num, timestamp_num,
+        #                                         d_static, n_class, args.n_layer, args.kernel_size, at=at, bt=bt, varatt_dim=varatt_dim)
+        #        model = CGU_timevaratt(device, attention_d_model, graph_node_d_model, variables_num, timestamp_num,
+        #                                         d_static, n_class, args.n_layer, args.kernel_size, at=at, bt=bt, varatt_dim=varatt_dim)
 
-        model = make_model(DEVICE=device, in_channels=1, attention_d_model=128, graph_node_d_model=64,
-                           num_of_vertices=variables_num, num_of_timesteps=timestamp_num,
-                           n_layer=1, kernel_size=3, d_static=d_static, n_class=n_class)
+        #        model = CGU_wo_interval(device, attention_d_model, graph_node_d_model, variables_num, timestamp_num,
+        #                                         d_static, n_class, args.n_layer, args.kernel_size, at=at, bt=bt, varatt_dim=varatt_dim)
         params = (list(model.parameters()))
 
         print('model', model)
         print('parameters:', count_parameters(model))
-        # remove part of variables in validation and test set
-        if missing_ratio > 0:
-            num_all_features =int(Pval_tensor.shape[2] / 2)
-            num_missing_features = round(missing_ratio * num_all_features)
-            if feature_removal_level == 'sample':
-                for i, patient in enumerate(Pval_tensor):
-                    idx = np.random.choice(num_all_features, num_missing_features, replace=False)
-                    patient[:, idx] = torch.zeros(Pval_tensor.shape[1], num_missing_features)
-                    Pval_tensor[i] = patient
-                for i, patient in enumerate(Ptest_tensor):
-                    idx = np.random.choice(num_all_features, num_missing_features, replace=False)
-                    patient[:, idx] = torch.zeros(Ptest_tensor.shape[1], num_missing_features)
-                    Ptest_tensor[i] = patient
-            elif feature_removal_level == 'set':
-                density_score_indices = np.load('./baselines/saved/IG_density_scores_' + dataset + '.npy', allow_pickle=True)[:, 0]
-                idx = density_score_indices[:num_missing_features].astype(int)
-                Pval_tensor[:, :, idx] = torch.zeros(Pval_tensor.shape[0], Pval_tensor.shape[1], num_missing_features)
-                Ptest_tensor[:, :, idx] = torch.zeros(Ptest_tensor.shape[0], Ptest_tensor.shape[1], num_missing_features)
 
         Ptrain_tensor = Ptrain_tensor.permute(1, 0, 2)[:timestamp_num, :, :]
         Pval_tensor = Pval_tensor.permute(1, 0, 2)[:timestamp_num, :, :]
@@ -211,16 +262,14 @@ for missing_ratio in missing_ratios:
         Pval_time_tensor = Pval_time_tensor.squeeze(2).permute(1, 0)[:timestamp_num, :]
         Ptest_time_tensor = Ptest_time_tensor.squeeze(2).permute(1, 0)[:timestamp_num, :]
 
-
         for m in range(n_runs):
             print('- - Run %d - -' % (m + 1))
 
-
             criterion = torch.nn.CrossEntropyLoss().cuda()
             optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5,
-                                                                   patience=0, threshold=0.0001, threshold_mode='rel',
-                                                                   cooldown=5, min_lr=1e-8, eps=1e-08, verbose=True)
+            # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5,
+            #                                                        patience=0, threshold=0.0001, threshold_mode='rel',
+            #                                                        cooldown=5, min_lr=1e-8, eps=1e-08, verbose=True)
             # scheduler = torch.optim.lr_scheduler.WarmupLinearSchedule(optimizer,
             #                                                           warmup_steps=5,
             #                                                           t_total=num_epochs)
@@ -238,10 +287,10 @@ for missing_ratio in missing_ratios:
             expanded_idx_1 = np.concatenate([idx_1, idx_1, idx_1], axis=0)
             # expanded_idx_1 = np.repeat(idx_1, 3, axis=0)
             # expanded_idx_1 = idx_1
-            #expanded_idx_1 = np.concatenate([idx_1, idx_1, idx_1, idx_1, idx_1, idx_1], axis=0)
+            # expanded_idx_1 = np.concatenate([idx_1, idx_1, idx_1, idx_1, idx_1, idx_1], axis=0)
             expanded_n1 = len(expanded_idx_1)
 
-            batch_size = args.batch_size
+            #            batch_size = args.batch_size
             if strategy == 1:
                 n_batches = 10
             elif strategy == 2:
@@ -250,15 +299,16 @@ for missing_ratio in missing_ratios:
                 n_batches = np.min([K0, K1])
             elif strategy == 3:
                 n_batches = 30
-
+            best_val_epoch = 0
             best_aupr_val = best_auc_val = 0.0
             best_loss_val = 100.0
-            print('Stop epochs: %d, Batches/epoch: %d, Total batches: %d' % (num_epochs, n_batches, num_epochs * n_batches))
+            print('Stop epochs: %d, Batches/epoch: %d, Total batches: %d' % (
+            num_epochs, n_batches, num_epochs * n_batches))
 
             start = time.time()
-            if wandb:
-                wandb.watch(model)
             for epoch in range(num_epochs):
+                if epoch - best_val_epoch > early_stop_epochs:
+                    break
                 model.train()
 
                 if strategy == 2:
@@ -279,18 +329,24 @@ for missing_ratio in missing_ratios:
                         # idx = random_sample_8(ytrain, batch_size)   # to balance dataset
 
                     if dataset == 'P12' or dataset == 'P19' or dataset == 'eICU' or dataset == 'physionet':
-                        P, Ptime, Pdelta_t, Plength, Pstatic, y = Ptrain_tensor[:, idx, :].cuda(), Ptrain_time_tensor[:, idx].cuda(),\
-                            Ptrain_delta_t_tensor[idx, :].cuda(), Ptrain_length_tensor[idx], \
-                            Ptrain_static_tensor[idx].cuda(), ytrain_tensor[idx].cuda()
+                        P, P_fft, Ptime, Pdelta_t, Plength, Pstatic, y = \
+                            Ptrain_tensor[:, idx, :].cuda(), Ptrain_fft_tensor[idx].cuda(), \
+                                Ptrain_time_tensor[:, idx].cuda(), \
+                                Ptrain_delta_t_tensor[idx, :].cuda(), Ptrain_length_tensor[idx], \
+                                Ptrain_static_tensor[idx].cuda(), ytrain_tensor[idx].cuda()
                     elif dataset == 'PAM':
-                        P, Ptime, Pdelta_t, Plength, Pstatic, y = Ptrain_tensor[:, idx, :].cuda(), Ptrain_time_tensor[:, idx].cuda(), \
+                        P, P_fft, Ptime, Pdelta_t, Plength, Pstatic, y = Ptrain_tensor[:, idx, :].cuda(), \
+                        Ptrain_fft_tensor[idx].cuda(), \
+                            Ptrain_time_tensor[:, idx].cuda(), \
                             Ptrain_delta_t_tensor[idx, :].cuda(), Ptrain_length_tensor[idx], \
                             None, ytrain_tensor[idx].cuda()
 
-                    outputs = model.forward(P.permute(1, 0, 2), Pdelta_t, Pstatic, Plength.squeeze(-1).to(device))
+                    outputs = model.forward(P.permute(1, 0, 2), P_fft, Pdelta_t, Pstatic,
+                                            Plength.squeeze(-1).to(device))
 
                     optimizer.zero_grad()
                     loss = criterion(outputs, y)
+                    #                    print(n, ":", loss)
                     loss.backward()
                     optimizer.step()
 
@@ -305,15 +361,15 @@ for missing_ratio in missing_ratios:
                     train_probs = train_probs.cpu().detach().numpy()
                     train_y = y.cpu().detach().numpy()
 
-                if wandb:
-                    wandb.log({"train_loss": loss.item(), "train_auprc": train_auprc, "train_auroc": train_auroc})
                 if epoch == 0 or epoch == num_epochs - 1:
                     print(confusion_matrix(train_y, np.argmax(train_probs, axis=1), labels=[0, 1]))
 
                 """Validation"""
                 model.eval()
                 with torch.no_grad():
-                    out_val = evaluate(model, Pval_tensor, Pval_time_tensor, Pval_static_tensor, Pval_delta_t_tensor, n_classes=n_class, batch_size=64)
+                    out_val = evaluate_nufft(model, Pval_tensor, Pval_fft_tensor, Pval_time_tensor, Pval_static_tensor,
+                                             Pval_delta_t_tensor, Pval_length_tensor,
+                                             n_classes=n_class, batch_size=64)
                     out_val = torch.squeeze(torch.sigmoid(out_val))
                     out_val = out_val.detach().cpu().numpy()
                     y_val_pred = np.argmax(out_val, axis=1)
@@ -327,22 +383,12 @@ for missing_ratio in missing_ratios:
                         auc_val = roc_auc_score(one_hot(yval), out_val)
                         aupr_val = average_precision_score(one_hot(yval), out_val)
 
-
-                    out_test = evaluate(model, Ptest_tensor, Ptest_time_tensor, Ptest_static_tensor, Ptest_delta_t_tensor,
-                                        n_classes=n_class, batch_size=64).numpy()
+                    out_test = evaluate_nufft(model, Ptest_tensor, Ptest_fft_tensor, Ptest_time_tensor,
+                                              Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor,
+                                              n_classes=n_class, batch_size=64).numpy()
 
                     denoms = np.sum(np.exp(out_test.astype(np.float64)), axis=1).reshape((-1, 1))
                     y_test = ytest.copy()
-                    # if np.max(denoms) == float("inf") or np.min(denoms) == float("-inf"):
-                    #     delete_line = np.where(denoms == float('inf'))
-                    #     denoms[delete_line[0], :] = denoms[(denoms.shape[0] - delete_line[0].shape[0]):, :]
-                    #     denoms = denoms[:denoms.shape[0] - delete_line[0].shape[0], :]
-                    #     out_test[delete_line[0], :] = out_test[(out_test.shape[0] - delete_line[0].shape[0]):, :]
-                    #     out_test = out_test[:out_test.shape[0] - delete_line[0].shape[0], :]
-                    #     y_test = ytest.copy()
-                    #     y_test[delete_line[0], :] = y_test[(y_test.shape[0] - delete_line[0].shape[0]):, :]
-                    #     y_test = y_test[:y_test.shape[0] - delete_line[0].shape[0], :]
-
                     probs = np.exp(out_test.astype(np.float64)) / denoms
                     ypred = np.argmax(out_test, axis=1)
 
@@ -363,46 +409,39 @@ for missing_ratio in missing_ratios:
                         recall = recall_score(y_test, ypred, average='macro', )
                         F1 = f1_score(y_test, ypred, average='macro', )
                         print('Testing: Precision = %.2f | Recall = %.2f | F1 = %.2f' % (
-                        precision * 100, recall * 100, F1 * 100))
+                            precision * 100, recall * 100, F1 * 100))
                         print(
                             "Validation: Epoch %d,  val_loss:%.2f, acc_val: %2f, aupr_val: %.2f, auc_val: %.2f" %
                             (epoch, val_loss.item(), acc_val * 100, aupr_val * 100, auc_val * 100))
 
-                    # if wandb:
-                    #     wandb.log({"val_loss": val_loss.item(), "val_auprc": aupr_val, "val_auroc": auc_val})
-
-                    #scheduler.step(auc_val)
-
-                    if auc_val > best_auc_val:
-                    # if aupr_val > best_aupr_val:
+                    # scheduler.step(auc_val)
+                    if (dataset == 'PAM' and auc_val > best_auc_val) or (dataset != 'PAM' and aupr_val > best_aupr_val):
                         best_auc_val = auc_val
+                        best_aupr_val = aupr_val
+                        best_val_epoch = epoch
                         print(
                             "**[S] Epoch %d, aupr_val: %.4f, auc_val: %.4f **" % (
-                            epoch, aupr_val * 100, auc_val * 100))
-                        torch.save(model.state_dict(), model_path + arch + '_' + dataset + '_' + str(sign) + '_' + str(split_idx) + '.pt')
+                                epoch, aupr_val * 100, auc_val * 100))
+                        
+                        torch.save(model.state_dict(),
+                                   model_path + arch + '_' + dataset + '_' + str(sign) + '_' + str(split_idx) + '.pt')
 
             end = time.time()
             time_elapsed = end - start
             print('Total Time elapsed: %.3f mins' % (time_elapsed / 60.0))
 
             """testing"""
-            model.load_state_dict(torch.load(model_path + arch + '_' + dataset + '_' + str(sign) + '_' + str(split_idx) + '.pt'))
+            model.load_state_dict(
+                torch.load(model_path + arch + '_' + dataset + '_' + str(sign) + '_' + str(split_idx) + '.pt'))
             model.eval()
 
             with torch.no_grad():
-                out_test = evaluate(model, Ptest_tensor, Ptest_time_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, n_classes=n_class, batch_size=64).numpy()
+                out_test = evaluate_nufft(model, Ptest_tensor, Ptest_fft_tensor, Ptest_time_tensor, Ptest_static_tensor,
+                                          Ptest_delta_t_tensor, Ptest_length_tensor,
+                                          n_classes=n_class, batch_size=64).numpy()
 
                 denoms = np.sum(np.exp(out_test.astype(np.float64)), axis=1).reshape((-1, 1))
                 y_test = ytest.copy()
-                # if np.max(denoms) == float("inf"):
-                #     delete_line = np.where(denoms == float('inf'))
-                #     denoms[delete_line[0], :] = denoms[(denoms.shape[0] - delete_line[0].shape[0]):, :]
-                #     denoms = denoms[:denoms.shape[0] - delete_line[0].shape[0], :]
-                #     out_test[delete_line[0], :] = out_test[(out_test.shape[0] - delete_line[0].shape[0]):, :]
-                #     out_test = out_test[:out_test.shape[0] - delete_line[0].shape[0], :]
-                #     y_test = ytest.copy()
-                #     y_test[delete_line[0], :] = y_test[(y_test.shape[0] - delete_line[0].shape[0]):, :]
-                #     y_test = y_test[:y_test.shape[0] - delete_line[0].shape[0], :]
                 probs = np.exp(out_test.astype(np.float64)) / denoms
                 ypred = np.argmax(out_test, axis=1)
                 acc = np.sum(y_test.ravel() == ypred.ravel()) / y_test.shape[0]
@@ -416,7 +455,8 @@ for missing_ratio in missing_ratios:
                     precision = precision_score(y_test, ypred, average='macro', )
                     recall = recall_score(y_test, ypred, average='macro', )
                     F1 = f1_score(y_test, ypred, average='macro', )
-                    print('Testing: Precision = %.2f | Recall = %.2f | F1 = %.2f' % (precision * 100, recall * 100, F1 * 100))
+                    print('Testing: Precision = %.2f | Recall = %.2f | F1 = %.2f' % (
+                    precision * 100, recall * 100, F1 * 100))
 
                 print('Testing: AUROC = %.2f | AUPRC = %.2f | Accuracy = %.2f' % (auc * 100, aupr * 100, acc * 100))
                 print('classification report', classification_report(y_test, ypred))
