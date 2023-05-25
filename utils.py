@@ -1265,7 +1265,158 @@ def tensorize_normalize_other_missing(P, y, mf, stdf, missingtype, missingratio,
             return P_tensor, None, torch.FloatTensor(P_delta_t_tensor), torch.tensor(P_length), P_time, y_tensor
     else:
         return tensorize_normalize_other(P, y, mf, stdf)
+def tensorize_normalize_misssing_ode(P, y, mf, stdf, ms, ss, missingtype, missingratio, idx = None, combined_tt = None):
+    origin_T, F = P[0]['arr'].shape
+    D = len(P[0]['extended_static'])
 
+    if missingratio > 0:
+        if missingtype == 'time':
+            T = int((1 - missingratio) * origin_T)
+            D = P[0]['arr'].shape[1]
+            left_time_list = []
+            idx_list = []
+            left_time = np.zeros((len(P), T))
+            for i in range(len(P)):
+                idx = np.sort(
+                    np.random.choice(P[i]['length'], math.ceil(P[i]['length'] * (1 - missingratio)), replace=False))
+                # time_i[:len(idx)] = P[i]['time'][idx]
+                left_time[i][:len(idx)] = P[i]['time'][idx][:, 0]
+                left_time_list.append(P[i]['time'][idx][:, 0])
+                idx_list.append(idx)
+            combined_tt, inverse_indices = torch.unique(torch.cat([torch.FloatTensor(ex) for ex in left_time_list]), sorted=True,
+                                                    return_inverse=True)
+            offset = 0
+            combined_vals = torch.zeros([len(P), len(combined_tt), D])
+            combined_mask = torch.zeros([len(P), len(combined_tt), D])
+            combined_labels = torch.squeeze(torch.FloatTensor(y))
+
+            for i in range(len(P)):
+                tt = left_time_list[i]
+                vals = P[i]['arr'][idx_list[i]]
+                mask = np.zeros_like(vals)
+                mask[np.where(vals != 0)] = 1
+                indices = inverse_indices[offset:offset + len(tt)]
+                offset += len(tt)
+                combined_vals[i, indices] = torch.FloatTensor(vals)
+                combined_mask[i, indices] = torch.FloatTensor(mask)
+            Ptensor = mask_normalize(combined_vals.numpy(), mf, stdf)
+            return torch.FloatTensor(Ptensor), combined_tt / torch.max(combined_tt), combined_labels
+        elif missingtype == 'variable':
+                T = origin_T
+                F = round((1 - missingratio) * F)
+                P_tensor = np.zeros((len(P), T, F))
+                P_time = np.zeros((len(P), T, 1))
+                P_delta_t = np.zeros((len(P), T, 1))
+                P_length = np.zeros([len(P), 1])
+                P_static_tensor = np.zeros((len(P), D))
+                for i in range(len(P)):
+                    P_tensor[i] = P[i]['arr'][:, idx]
+                    P_time[i] = P[i]['time']
+                    P_time_right_shifting = np.insert(P_time[i][:-1], 0, values=P_time[i][0])
+                    P_static_tensor[i] = P[i]['extended_static']
+                    P_length[i] = P[i]['length']
+                    P_delta_t[i] = (P_time[i] - np.expand_dims(P_time_right_shifting, -1)) / 60.0
+                    if P[i]['length'] < T:
+                        P_delta_t[i][P[i]['length']] = 0
+                P_tensor = mask_normalize(P_tensor, mf[idx], stdf[idx])
+                P_tensor = torch.Tensor(P_tensor)
+
+                P_time = torch.Tensor(P_time) / 60.0  # convert mins to hours
+                P_tensor = torch.cat((P_tensor, P_time), dim=2)
+
+                P_delta_t_tensor = mask_normalize_delta(P_delta_t.squeeze(-1))
+                P_static_tensor = mask_normalize_static(P_static_tensor, ms, ss)
+                P_static_tensor = torch.Tensor(P_static_tensor)
+                y_tensor = y
+                y_tensor = torch.Tensor(y_tensor[:, 0]).type(torch.LongTensor)
+                return P_tensor, P_static_tensor, torch.FloatTensor(P_delta_t_tensor), torch.tensor(
+                    P_length), P_time, y_tensor
+    else:
+        D = P[0]['arr'].shape[1]
+        combined_tt, inverse_indices = torch.unique(torch.cat([torch.FloatTensor(ex['time']) for ex in P]), sorted=True,
+                                                    return_inverse=True)
+        offset = 0
+        combined_vals = torch.zeros([len(P), len(combined_tt), D])
+        combined_mask = torch.zeros([len(P), len(combined_tt), D])
+
+        combined_labels = torch.squeeze(torch.FloatTensor(y))
+
+        for i in range(len(P)):
+            tt = P[i]['time']
+            vals = P[i]['arr']
+            mask = np.zeros_like(vals)
+            mask[np.where(vals != 0)] = 1
+            indices = inverse_indices[offset:offset + len(tt)]
+            offset += len(tt)
+
+            combined_vals[i, indices] = torch.FloatTensor(vals).unsqueeze(1)
+            combined_mask[i, indices] = torch.FloatTensor(mask).unsqueeze(1)
+        Ptensor = mask_normalize(combined_vals.numpy(), mf, stdf)
+        return torch.FloatTensor(Ptensor), combined_tt / torch.max(combined_tt), combined_labels
+
+def tensorize_normalize_other_missing_ode(P, y, mf, stdf, missingtype, missingratio, idx=None):
+    origin_T, F = P[0].shape
+    if missingratio > 0:
+        if missingtype == 'time':
+            T = int((1 - missingratio) * origin_T)
+            D = F
+            left_time_list = []
+            idx_list = []
+            left_time = np.zeros((len(P), T))
+            time = np.arange(0, origin_T)
+            for i in range(len(P)):
+                idx = np.sort(np.random.choice(origin_T, round(T), replace=False))
+                # time_i[:len(idx)] = P[i]['time'][idx]
+                left_time[i][:len(idx)] = time[idx][:]
+                left_time_list.append(time[idx][:])
+                idx_list.append(idx)
+            combined_tt, inverse_indices = torch.unique(torch.cat([torch.FloatTensor(ex) for ex in left_time_list]),
+                                                        sorted=True,
+                                                        return_inverse=True)
+            offset = 0
+            combined_vals = torch.zeros([len(P), len(combined_tt), D])
+            combined_mask = torch.zeros([len(P), len(combined_tt), D])
+            combined_labels = torch.squeeze(torch.FloatTensor(y))
+
+            for i in range(len(P)):
+                tt = left_time_list[i]
+                vals = P[i][idx_list[i]]
+                mask = np.zeros_like(vals)
+                mask[np.where(vals != 0)] = 1
+                indices = inverse_indices[offset:offset + len(tt)]
+                offset += len(tt)
+                combined_vals[i, indices] = torch.FloatTensor(vals)
+                combined_mask[i, indices] = torch.FloatTensor(mask)
+            Ptensor = mask_normalize(combined_vals.numpy(), mf, stdf)
+            return torch.FloatTensor(Ptensor), combined_tt / torch.max(combined_tt), combined_labels
+        elif missingtype == 'variable':
+            F = round((1 - missingratio) * F)
+            T = origin_T
+            P_time = np.zeros((len(P), T, 1))
+            P_delta_t = np.zeros((len(P), T, 1))
+            P_length = np.zeros([len(P), 1])
+
+            for i in range(len(P)):
+                tim = torch.linspace(0, T, T).reshape(-1, 1)
+                P_time[i] = tim
+                P_time_right_shifting = np.insert(P_time[i][:-1], 0, values=P_time[i][0])
+                P_delta_t[i] = (P_time[i] - np.expand_dims(P_time_right_shifting, -1)) / 60.0
+                P_length[i] = 600
+            P_tensor = mask_normalize(P[:, :, idx], mf[idx], stdf[idx])
+            P_tensor = torch.Tensor(P_tensor)
+
+            P_time = torch.Tensor(P_time) / 60.0
+            P_tensor = torch.cat((P_tensor, P_time), dim=2)
+            P_delta_t_tensor = mask_normalize_delta(P_delta_t.squeeze(-1))
+
+            y_tensor = y
+            y_tensor = torch.Tensor(y_tensor[:, 0]).type(torch.LongTensor)
+            return P_tensor, None, torch.FloatTensor(P_delta_t_tensor), torch.tensor(P_length), P_time, y_tensor
+    else:
+        Ptensor = mask_normalize(P, mf, stdf)
+        combined_tt = torch.arange(0, origin_T)
+        combined_labels = torch.squeeze(torch.FloatTensor(y))
+        return torch.FloatTensor(Ptensor), combined_tt / origin_T, combined_labels
 def tensorize_normalize_other_missing_with_nufft(P, y, mf, stdf, missingtype, missingratio, idx=None):
     origin_T, F = P[0].shape
     if missingratio > 0:

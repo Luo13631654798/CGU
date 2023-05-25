@@ -38,7 +38,7 @@ import time
 from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, average_precision_score, \
     precision_score, recall_score, f1_score
 # from utils_rd import *
-from cru_model import *
+from cgu_model import *
 import warnings
 from utils import *
 
