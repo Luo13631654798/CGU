@@ -1514,6 +1514,32 @@ def mask_normalize_delta(P_delta_tensor):
     P_delta_tensor = (P_delta_tensor - min) / ((max - min) + 1e-18)
     P_delta_tensor[idx_missing] = 0
     return P_delta_tensor
+def one_hot(y_):
+    y_ = y_.reshape(len(y_))
+
+    y_ = [int(x) for x in y_]
+    n_values = np.max(y_) + 1
+    return np.eye(n_values)[np.array(y_, dtype=np.int32)]
+def create_net(n_inputs, n_outputs, n_layers=0, n_units=10, nonlinear=nn.Tanh, add_softmax=False, dropout=0.0):
+    if n_layers >= 0:
+        layers = [nn.Linear(n_inputs, n_units)]
+        for i in range(n_layers):
+            layers.append(nonlinear())
+            layers.append(nn.Linear(n_units, n_units))
+            layers.append(nn.Dropout(p=dropout))
+
+        layers.append(nonlinear())
+        layers.append(nn.Linear(n_units, n_outputs))
+        if add_softmax:
+            layers.append(nn.Softmax(dim=-1))
+
+    else:
+        layers = [nn.Linear(n_inputs, n_outputs)]
+
+        if add_softmax:
+            layers.append(nn.Softmax(dim=-1))
+
+    return nn.Sequential(*layers)
 
 def get_data_split(base_path='./data/P12data', split_path='', split_type='random', reverse=False, baseline=True, dataset='P12', predictive_label='mortality'):
     # load data
