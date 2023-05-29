@@ -3,7 +3,7 @@ import sys
 sys.path.append("..")
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', type=str, default='PAM', choices=['P12', 'P19', 'PAM', 'physionet', 'mimic3']) #
+parser.add_argument('--dataset', type=str, default='PAM', choices=['P12', 'P19', 'PAM', 'physionet']) #
 parser.add_argument('--cuda', type=str, default='0') #
 parser.add_argument('--epochs', type=int, default=20) #
 parser.add_argument('--batch_size', type=int, default=32) #
@@ -21,7 +21,7 @@ import time
 from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, average_precision_score, precision_score, recall_score, f1_score
 import warnings
 from utils import *
-from utils_phy12 import evaluate_standard, evaluate, evaluate_MTGNN, evaluate_DGM2, evaluate_mTAND, evaluate_GRUD
+from utils_baselines import evaluate_standard, evaluate, evaluate_MTGNN, evaluate_DGM2, evaluate_mTAND, evaluate_GRUD
 warnings.filterwarnings("ignore")
 wandb = False
 device = torch.device(
@@ -388,9 +388,6 @@ for missing_ratio in missing_ratios:
             if (dataset == 'PAM' and auc_val > best_auc_val) or (dataset != 'PAM' and aupr_val > best_aupr_val):
                     best_auc_val = auc_val
                     best_aupr_val = aupr_val
-                    print(
-                        "**[S] Epoch %d, aupr_val: %.4f, auc_val: %.4f **" % (
-                        epoch, aupr_val * 100, auc_val * 100))
                     torch.save(model.state_dict(), model_path + arch + '_' + dataset + '_' + args.missingtype + '_' + str(split_idx) + '.pt')
 
 

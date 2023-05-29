@@ -1,7 +1,7 @@
 import argparse
 parser = argparse.ArgumentParser()
 
-parser.add_argument('--dataset', type=str, default='PAM', choices=['P12', 'P19', 'PAM', 'physionet', 'mimic3']) #
+parser.add_argument('--dataset', type=str, default='PAM', choices=['P12', 'P19', 'PAM', 'physionet']) #
 parser.add_argument('--cuda', type=str, default='0') #
 parser.add_argument('--epochs', type=int, default=10) #
 parser.add_argument('--batch_size', type=int, default=96) #
@@ -122,10 +122,8 @@ for missing_ratio in missing_ratios:
             split_path = '/splits/PAMAP2_split_' + str(split_idx) + '.npy'
 
         # prepare the data:
-        if dataset != 'mimic3':
-            Ptrain, Pval, Ptest, ytrain, yval, ytest = get_data_split(base_path, split_path, dataset=dataset)
-            print(len(Ptrain), len(Pval), len(Ptest), len(ytrain), len(yval), len(ytest))
-
+        Ptrain, Pval, Ptest, ytrain, yval, ytest = get_data_split(base_path, split_path, dataset=dataset)
+        print(len(Ptrain), len(Pval), len(Ptest), len(ytrain), len(yval), len(ytest))
         if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
             T, F = Ptrain[0]['arr'].shape
             D = len(Ptrain[0]['extended_static'])
@@ -303,9 +301,6 @@ for missing_ratio in missing_ratios:
                     best_auc_val = auc_val
                     best_aupr_val = aupr_val
                     best_val_epoch = epoch
-                    print(
-                        "**[S] Epoch %d, aupr_val: %.4f, auc_val: %.4f **" % (
-                        epoch, aupr_val * 100, auc_val * 100))
                     torch.save(model.state_dict(),
                                model_path + arch + '_' + dataset + '_' + args.missingtype + '_' + str(split_idx) + '.pt')
 

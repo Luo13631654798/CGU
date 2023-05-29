@@ -24,7 +24,6 @@ from keras.utils import multi_gpu_model
 from keras.layers import Input, Dense, GRU, Lambda, Permute
 from keras.models import Model
 from interpolation_layer import single_channel_interp, cross_channel_interp
-# from mimic_preprocessing import load_data, trim_los, fix_input_format
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -79,7 +78,6 @@ def mean_imputation(vitals, mask):
                 mask[i, j, 0] = 1
                 vitals[i, j, 0] = mean_values[j]
     return
-
 
 ap = argparse.ArgumentParser()
 ap.add_argument("-g", "--gpus", type=int, default=1,
@@ -154,10 +152,6 @@ elif dataset == 'PAM':
     variables_num = 17
     timestamp_num = 600
     n_class = 8
-elif dataset == 'mimic3':
-    variables_num = 12
-    timestamp_num = 200
-    n_class = 2
 
 if dataset == 'P12':
     base_path = '../data/P12data'
@@ -165,8 +159,6 @@ elif dataset == 'physionet':
     base_path = '../data/physionet/PhysioNet'
 elif dataset == 'P19':
     base_path = '../data/P19data'
-elif dataset == 'mimiciii':
-    base_path = '../data/MIMIC-III'
 elif dataset == 'PAM':
     base_path = '../data/PAMdata'
 
@@ -249,8 +241,6 @@ for i in range(5):
         split_path = '/splits/phy12_split' + str(split_idx) + '.npy'
     elif dataset == 'P19':
         split_path = '/splits/phy19_split' + str(split_idx) + '_new.npy'
-    elif dataset == 'eICU':
-        split_path = '/splits/eICU_split' + str(split_idx) + '.npy'
     elif dataset == 'PAM':
         split_path = '/splits/PAMAP2_split_' + str(split_idx) + '.npy'
 
@@ -258,7 +248,7 @@ for i in range(5):
 
     print(len(Ptrain), len(Pval), len(Ptest), len(ytrain), len(yval), len(ytest))
 
-    if dataset == 'P12' or dataset == 'P19' or dataset == 'eICU' or dataset == 'physionet':
+    if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
         T, F = Ptrain[0]['arr'].shape
         D = len(Ptrain[0]['extended_static'])
 
@@ -293,13 +283,6 @@ for i in range(5):
             = tensorize_normalize_other(Pval, yval, mf, stdf)
         Ptest_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
             = tensorize_normalize_other(Ptest, ytest, mf, stdf)
-
-    elif dataset == 'mimic3':
-        data_objects = get_mimiciii_data(batch_size=batch_size, split=k)
-        train_dataloader = data_objects['train_dataloader']
-        val_dataloader = data_objects['val_dataloader']
-        test_dataloader = data_objects['test_dataloader']
-
 
     y_train = ytrain_tensor.numpy()
     y_test = ytest_tensor.numpy()

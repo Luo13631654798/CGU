@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torchdiffeq import odeint as odeint
 
-from utils_phy12 import linspace_vector
+from utils_baselines import linspace_vector
 from torch.nn.parameter import Parameter
 from torch_geometric.nn.inits import glorot
 
@@ -16,7 +16,7 @@ from torch.nn import Sequential, Linear, BatchNorm1d, ReLU
 
 import warnings
 from torch.nn.init import xavier_uniform_
-import utils_ode as utils
+import utils_baselines as utils
 
 class PositionalEncodingTF(nn.Module):
     def __init__(self, d_model, max_len=500, MAX=10000,):

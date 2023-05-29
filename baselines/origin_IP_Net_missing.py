@@ -24,7 +24,6 @@ from keras.utils import multi_gpu_model
 from keras.layers import Input, Dense, GRU, Lambda, Permute
 from keras.models import Model
 from interpolation_layer import single_channel_interp, cross_channel_interp
-# from mimic_preprocessing import load_data, trim_los, fix_input_format
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -154,10 +153,6 @@ elif dataset == 'PAM':
     variables_num = 17
     timestamp_num = 600
     n_class = 8
-elif dataset == 'mimic3':
-    variables_num = 12
-    timestamp_num = 200
-    n_class = 2
 
 if dataset == 'P12':
     base_path = '../data/P12data'
@@ -165,8 +160,6 @@ elif dataset == 'physionet':
     base_path = '../data/physionet/PhysioNet'
 elif dataset == 'P19':
     base_path = '../data/P19data'
-elif dataset == 'mimiciii':
-    base_path = '../data/MIMIC-III'
 elif dataset == 'PAM':
     base_path = '../data/PAMdata'
 
@@ -256,8 +249,6 @@ for missing_ratio in missing_ratios:
             split_path = '/splits/phy12_split' + str(split_idx) + '.npy'
         elif dataset == 'P19':
             split_path = '/splits/phy19_split' + str(split_idx) + '_new.npy'
-        elif dataset == 'eICU':
-            split_path = '/splits/eICU_split' + str(split_idx) + '.npy'
         elif dataset == 'PAM':
             split_path = '/splits/PAMAP2_split_' + str(split_idx) + '.npy'
 
@@ -271,7 +262,7 @@ for missing_ratio in missing_ratios:
         else:
             idx = None
 
-        if dataset == 'P12' or dataset == 'P19' or dataset == 'eICU' or dataset == 'physionet':
+        if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
             T, F = Ptrain[0]['arr'].shape
             D = len(Ptrain[0]['extended_static'])
 

@@ -1,7 +1,7 @@
 import argparse
 import sys
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', type=str, default='physionet', choices=['P12', 'P19', 'PAM', 'physionet', 'mimic3'])  #
+parser.add_argument('--dataset', type=str, default='physionet', choices=['P12', 'P19', 'PAM', 'physionet'])  #
 parser.add_argument('--cuda', type=str, default='0')  #
 parser.add_argument('--epochs', type=int, default=10)  #
 parser.add_argument('--early_stop_epochs', type=int, default=10)  #
@@ -269,9 +269,6 @@ for k in range(0, n_splits):
                 best_auc_val = auc_val
                 best_aupr_val = aupr_val
                 best_val_epoch = epoch
-                print(
-                    "**[S] Epoch %d, aupr_val: %.4f, auc_val: %.4f **" % (
-                        epoch, aupr_val * 100, auc_val * 100))
 
                 torch.save(model.state_dict(),
                            model_path + arch + '_' + dataset + '_' + str(sign) + '_' + str(split_idx) + '.pt')
