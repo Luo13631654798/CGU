@@ -51,7 +51,7 @@ elif dataset == 'PAM':
 
 batch_size = args.batch_size
 num_epochs = args.epochs
-learning_rate = args.lr  # 0.001 works slightly better, sometimes 0.0001 better, depends on settings and datasets
+learning_rate = args.lr
 if args.dataset == 'P12' or args.dataset == 'physionet':
     variables_num = 36
     # timestamp_num = 160

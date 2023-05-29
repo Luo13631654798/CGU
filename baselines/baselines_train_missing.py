@@ -9,8 +9,7 @@ parser.add_argument('--epochs', type=int, default=20) #
 parser.add_argument('--batch_size', type=int, default=32) #
 parser.add_argument('--lr', type=float, default=1e-3) #
 parser.add_argument('--missingtype', type=str, default='nomissing', choices=['nomissing', 'time', 'variable'])
-parser.add_argument('--baseline', type=str, default='mTAND', choices=['GRUD', 'SEFT', 'mTAND',
-                                                                    'IPNet', 'DGM2O', 'MTGNN', 'RAINDROP'])
+parser.add_argument('--baseline', type=str, default='mTAND', choices=['GRUD', 'SEFT', 'mTAND', 'DGM2O', 'MTGNN', 'RAINDROP'])
 args, unknown = parser.parse_known_args()
 print(args)
 import os
@@ -59,7 +58,7 @@ print('missing ratio list', missing_ratios)
 
 for missing_ratio in missing_ratios:
     num_epochs = args.epochs
-    learning_rate = args.lr  # 0.001 works slightly better, sometimes 0.0001 better, depends on settings and datasets
+    learning_rate = args.lr
     if args.dataset == 'P12' or args.dataset == 'physionet':
         variables_num = 36
         d_static = 9

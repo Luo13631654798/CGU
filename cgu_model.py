@@ -34,33 +34,21 @@ class PositionalEncodingTF(nn.Module):
 
 class Variable_Attention_layer(nn.Module):
     '''
-    compute spatial attention scores
+    compute Variable_Attention_layer attention scores
     '''
-
     def __init__(self, DEVICE, num_of_vertices, num_of_timestamps, d_model):
         super(Variable_Attention_layer, self).__init__()
         self.d_model = d_model
         self.WK = nn.Parameter(torch.randn(num_of_timestamps, d_model).to(DEVICE))
         self.WQ = nn.Parameter(torch.randn(num_of_timestamps, d_model).to(DEVICE))
-        # nn.init.xavier_uniform_(self.WK.data, gain=1)
-        # nn.init.xavier_uniform_(self.WQ.data, gain=1)
-        # nn.init.normal_(self.WK, mean=0, std=1)
-        # nn.init.normal_(self.WQ, mean=0, std=1)
-        # nn.init.xavier_normal_(self.WK.data, gain=1)
-        # nn.init.xavier_normal_(self.WQ.data, gain=1)
 
     def forward(self, x):
-        '''
-        :param x: (batch_size, N, T)
-        :return: (B,N,N)
-        '''
-
         Q = torch.matmul(x, self.WQ)
+
         K_T = torch.matmul(x, self.WK).permute(0, 2, 1)
 
         product = torch.matmul(Q, K_T)  # (b,N,T)(b,T,N) -> (B, N, N)
 
-        # S = torch.sigmoid(product) / torch.sqrt(torch.tensor(self.d_model))  # (N,N)(B, N, N)->(B,N,N)
         S = torch.relu(product) / torch.sqrt(torch.tensor(self.d_model))  # (N,N)(B, N, N)->(B,N,N)
 
         S_normalized = F.softmax(S, dim=-1)
@@ -111,17 +99,12 @@ class CGU(nn.Module):
         self.to(DEVICE)
 
     def forward(self, x, nufft, delta_t, static=None, lengths=0):
-        '''
-        :param x: (B, N_nodes, F_in, T_in)
-        :return: (B, N_nodes, T_out)
-        '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
         step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
                                                                                                         1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
-        #        temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
         temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
@@ -141,37 +124,16 @@ class CGU(nn.Module):
 
         x_TAt = mask * temporal_transformer_input + (1 - mask) * temporal_transformer_output
 
-        # spatial_At_t = torch.mean(self.SAt_time(torch.squeeze(x)), dim=0)
         spatial_At_f = torch.mean(self.SAt_frequency(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
-
-        # spatial_At_t = 0.5 * (spatial_At_t + spatial_At_t.T)
-        # spatial_At_f = 0.5 * (spatial_At_f + spatial_At_f.T)
-
-        # adj_mask_f = torch.zeros_like(spatial_At_f).to(self.DEVICE)
-        # adj_mask_f.fill_(float('0'))
-        # s1, t1 = spatial_At_f.topk(self.topK // 2, -1)
-        # adj_mask_f.scatter_(1, t1, s1.fill_(1))
-        # spatial_At_f = spatial_At_f * adj_mask_f
-
-        # spatial_At_t = spatial_At_t * (1 - adj_mask_f)
-        # adj_mask_t = torch.zeros_like(spatial_At_t).to(self.DEVICE)
-        # adj_mask_t.fill_(float('0'))
-        # s1, t1 = spatial_At_t.topk(self.topK // 2, -1)
-        # adj_mask_t.scatter_(1, t1, s1.fill_(1))
-        # spatial_At_t = spatial_At_t * adj_mask_t * (1 - adj_mask_f)
-
-        # spatial_At = spatial_At_f + spatial_At_t
         spatial_At = spatial_At_f
         spatial_At = 0.5 * (spatial_At + spatial_At.T)
         spatial_At = 0.5 * (torch.softmax(spatial_At, dim=-1) + torch.softmax(spatial_At, dim=-1).T)
-        # spatial_At[torch.where(spatial_At > 0.04)] = spatial_At[torch.where(spatial_At > 0.04)] * 0.5
-        #        spatial_At = torch.ones(size=[num_of_vertices, num_of_vertices]).to(self.DEVICE) / num_of_vertices
+
         # [batches, nodes, hidden_dim, timestamps]
         spatial_gcn = self.GCRNN(x_TAt, spatial_At, delta_t, lengths, graph_input_time_encoding, mask)
 
         out = torch.squeeze(self.final_conv(spatial_gcn.unsqueeze(-1)))
 
-        # (b,N,F,T)->(b,T,N,F)-conv<1,F>->(b,c_out*T,N,1)->(b,c_out*T,N)->(b,N,T)
         if self.d_static != 0:
             emb = self.emb(static)
             output = self.classifier(torch.cat([torch.squeeze(out), emb], dim=-1))
@@ -223,17 +185,12 @@ class CGU_timevaratt(nn.Module):
         self.to(DEVICE)
 
     def forward(self, x, nufft, delta_t, static=None, lengths=0):
-        '''
-        :param x: (B, N_nodes, F_in, T_in)
-        :return: (B, N_nodes, T_out)
-        '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
         step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
                                                                                                         1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
-        #        temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
         temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
@@ -257,14 +214,11 @@ class CGU_timevaratt(nn.Module):
         spatial_At = spatial_At_t
         spatial_At = 0.5 * (spatial_At + spatial_At.T)
         spatial_At = 0.5 * (torch.softmax(spatial_At, dim=-1) + torch.softmax(spatial_At, dim=-1).T)
-        # spatial_At[torch.where(spatial_At > 0.04)] = spatial_At[torch.where(spatial_At > 0.04)] * 0.5
-        #        spatial_At = torch.ones(size=[num_of_vertices, num_of_vertices]).to(self.DEVICE) / num_of_vertices
-        # [batches, nodes, hidden_dim, timestamps]
+
         spatial_gcn = self.GCRNN(x_TAt, spatial_At, delta_t, lengths, graph_input_time_encoding, mask)
 
         out = torch.squeeze(self.final_conv(spatial_gcn.unsqueeze(-1)))
 
-        # (b,N,F,T)->(b,T,N,F)-conv<1,F>->(b,c_out*T,N,1)->(b,c_out*T,N)->(b,N,T)
         if self.d_static != 0:
             emb = self.emb(static)
             output = self.classifier(torch.cat([torch.squeeze(out), emb], dim=-1))
@@ -314,17 +268,12 @@ class CGU_wovaratt(nn.Module):
         self.to(DEVICE)
 
     def forward(self, x, nufft, delta_t, static=None, lengths=0):
-        '''
-        :param x: (B, N_nodes, F_in, T_in)
-        :return: (B, N_nodes, T_out)
-        '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
         step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
                                                                                                         1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
-        #        temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
         temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
@@ -344,12 +293,10 @@ class CGU_wovaratt(nn.Module):
 
         x_TAt = mask * temporal_transformer_input + (1 - mask) * temporal_transformer_output
         spatial_At = torch.ones(size=[num_of_vertices, num_of_vertices]).to(self.DEVICE) / num_of_vertices
-        # [batches, nodes, hidden_dim, timestamps]
         spatial_gcn = self.GCRNN(x_TAt, spatial_At, delta_t, lengths, graph_input_time_encoding, mask)
 
         out = torch.squeeze(self.final_conv(spatial_gcn.unsqueeze(-1)))
 
-        # (b,N,F,T)->(b,T,N,F)-conv<1,F>->(b,c_out*T,N,1)->(b,c_out*T,N)->(b,N,T)
         if self.d_static != 0:
             emb = self.emb(static)
             output = self.classifier(torch.cat([torch.squeeze(out), emb], dim=-1))
@@ -401,17 +348,12 @@ class CGU_wo_timeatt(nn.Module):
         self.to(DEVICE)
 
     def forward(self, x, nufft, delta_t, static=None, lengths=0):
-        '''
-        :param x: (B, N_nodes, F_in, T_in)
-        :return: (B, N_nodes, T_out)
-        '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
         step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
                                                                                                         1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
-        #        temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
         temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
@@ -421,29 +363,20 @@ class CGU_wo_timeatt(nn.Module):
         graph_input_time_encoding = self.time_encoder2(step.squeeze(1)[:, 0, :].permute(1, 0))
         temporal_transformer_input = temporal_transformer_input + torch.repeat_interleave(time_encoding,
                                                                                           num_of_vertices, dim=1)
-        #        temporal_transformer_output = self.transformer_encoder_temporal(temporal_transformer_input,
-        #                                                                        src_key_padding_mask=transformer_mask)
-
         temporal_transformer_input = temporal_transformer_input \
             .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
-        #        temporal_transformer_output = temporal_transformer_output \
-        #            .reshape(num_of_timesteps, batch_size, num_of_vertices, self.attention_d_model).permute(1, 3, 2, 0)
 
         x_TAt = temporal_transformer_input
 
-        # spatial_At_t = torch.mean(self.SAt_time(torch.squeeze(x)), dim=0)
+
         spatial_At_f = torch.mean(self.SAt_frequency(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
         spatial_At = spatial_At_f
         spatial_At = 0.5 * (spatial_At + spatial_At.T)
         spatial_At = 0.5 * (torch.softmax(spatial_At, dim=-1) + torch.softmax(spatial_At, dim=-1).T)
-        # spatial_At[torch.where(spatial_At > 0.04)] = spatial_At[torch.where(spatial_At > 0.04)] * 0.5
-        #        spatial_At = torch.ones(size=[num_of_vertices, num_of_vertices]).to(self.DEVICE) / num_of_vertices
-        # [batches, nodes, hidden_dim, timestamps]
         spatial_gcn = self.GCRNN(x_TAt, spatial_At, delta_t, lengths, graph_input_time_encoding, mask)
 
         out = torch.squeeze(self.final_conv(spatial_gcn.unsqueeze(-1)))
 
-        # (b,N,F,T)->(b,T,N,F)-conv<1,F>->(b,c_out*T,N,1)->(b,c_out*T,N)->(b,N,T)
         if self.d_static != 0:
             emb = self.emb(static)
             output = self.classifier(torch.cat([torch.squeeze(out), emb], dim=-1))
@@ -495,17 +428,12 @@ class CGU_wo_interval(nn.Module):
         self.to(DEVICE)
 
     def forward(self, x, nufft, delta_t, static=None, lengths=0):
-        '''
-        :param x: (B, N_nodes, F_in, T_in)
-        :return: (B, N_nodes, T_out)
-        '''
         value = x[:, :, :self.num_of_vertices].permute(0, 2, 1).unsqueeze(2)
         mask = x[:, :, self.num_of_vertices:2 * self.num_of_vertices].permute(0, 2, 1).unsqueeze(1)
         step = torch.repeat_interleave(x[:, :, -1].unsqueeze(-1), self.num_of_vertices, dim=-1).permute(0, 2,
                                                                                                         1).unsqueeze(1)
         x = value
         batch_size, num_of_vertices, num_of_features, num_of_timesteps = x.shape
-        # temporal_observation_embedding = self.sigma(self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1)))
         temporal_observation_embedding = self.input_projection(torch.cat([x.permute(0, 2, 1, 3), mask], dim=1))
         temporal_transformer_input = temporal_observation_embedding.permute(3, 0, 2, 1) \
             .reshape(num_of_timesteps, batch_size * num_of_vertices, self.attention_d_model)
@@ -525,20 +453,16 @@ class CGU_wo_interval(nn.Module):
 
         x_TAt = mask * temporal_transformer_input + (1 - mask) * temporal_transformer_output
 
-        # spatial_At_t = torch.mean(self.SAt_time(torch.squeeze(x)), dim=0)
         spatial_At_f = torch.mean(self.SAt_frequency(torch.squeeze(nufft[:, 1, :, :].permute(0, 2, 1))), dim=0)
 
         spatial_At = spatial_At_f
         spatial_At = 0.5 * (spatial_At + spatial_At.T)
         spatial_At = 0.5 * (torch.softmax(spatial_At, dim=-1) + torch.softmax(spatial_At, dim=-1).T)
-        # spatial_At[torch.where(spatial_At > 0.04)] = spatial_At[torch.where(spatial_At > 0.04)] * 0.5
-        #        spatial_At = torch.ones(size=[num_of_vertices, num_of_vertices]).to(self.DEVICE) / num_of_vertices
-        # [batches, nodes, hidden_dim, timestamps]
+
         spatial_gcn = self.GCRNN(x_TAt, spatial_At, delta_t, lengths, graph_input_time_encoding, mask)
 
         out = torch.squeeze(self.final_conv(spatial_gcn.unsqueeze(-1)))
 
-        # (b,N,F,T)->(b,T,N,F)-conv<1,F>->(b,c_out*T,N,1)->(b,c_out*T,N)->(b,N,T)
         if self.d_static != 0:
             emb = self.emb(static)
             output = self.classifier(torch.cat([torch.squeeze(out), emb], dim=-1))

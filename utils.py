@@ -32,7 +32,7 @@ def normalize_masked_data(data, mask, att_min, att_max):
 
     return data_norm, att_min, att_max
 
-def getStats(P_tensor):  # 返回每个变量的均值和方差
+def getStats(P_tensor):
     N, T, F = P_tensor.shape
     Pf = P_tensor.transpose((2, 0, 1)).reshape(F, -1)
     mf = np.zeros((F, 1))
@@ -49,7 +49,7 @@ def getStats(P_tensor):  # 返回每个变量的均值和方差
         stdf[f] = np.max([stdf[f], eps])
     return mf, stdf
 
-def getStats_static(P_tensor, dataset='P12'):  # 返回静态变量的均值和方差
+def getStats_static(P_tensor, dataset='P12'):
     N, S = P_tensor.shape
     Ps = P_tensor.transpose((1, 0))
     ms = np.zeros((S, 1))
@@ -152,14 +152,9 @@ def tensorize_normalize_with_nufft(P, y, mf, stdf, ms, ss, interp):
                 t = P_time[i][idx_not_zero]
                 nufft_complex, f = nufft(x, t)
                 interval = math.floor((T - 1) / (len(idx_not_zero[0]) - 1))
-                # P_fft_tensor[i, 0, :len(idx_not_zero[0]), j] = f
                 P_fft_tensor[i][0][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = f
-                # P_fft_tensor[i, 1, :len(idx_not_zero[0]), j] = \
-                #     np.sqrt(nufft_complex.real * nufft_complex.real + nufft_complex.imag * nufft_complex.imag)
                 P_fft_tensor[i][1][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = \
                     np.sqrt(nufft_complex.real * nufft_complex.real + nufft_complex.imag * nufft_complex.imag)
-                # P_fft_tensor[i, 2, :len(idx_not_zero[0]), j] = \
-                #     np.arctan(nufft_complex.imag / (nufft_complex.real + 1e-8))
                 P_fft_tensor[i][2][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = \
                     np.arctan(nufft_complex.imag / (nufft_complex.real + 1e-8))
 
@@ -267,17 +262,13 @@ def tensorize_normalize_other_with_nufft(P, y, mf, stdf):
                 t = P_time[i][idx_not_zero]
                 nufft_complex= np.fft.fft(x)
                 interval = math.floor((T - 1) / (len(idx_not_zero[0]) - 1))
-#                P_fft_tensor[i][0][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = f
                 P_fft_tensor[i][1][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = \
                     np.sqrt(nufft_complex.real * nufft_complex.real + nufft_complex.imag * nufft_complex.imag)
-#                P_fft_tensor[i][2][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = \
-#                    np.arctan(nufft_complex.imag / (nufft_complex.real + 1e-8))
 
     P_tensor = torch.Tensor(P_tensor)
 
     P_time = torch.Tensor(P_time) / 60.0
     P_tensor = torch.cat((P_tensor, P_time), dim=2)
-#    P_delta_t_tensor = mask_normalize_delta(P_delta_t.squeeze(-1))
     P_delta_t_tensor = P_delta_t.squeeze(-1)
     y_tensor = y
     y_tensor = torch.Tensor(y_tensor[:, 0]).type(torch.LongTensor)
@@ -449,7 +440,6 @@ def tensorize_normalize_misssing_ode(P, y, mf, stdf, ms, ss, missingtype, missin
             for i in range(len(P)):
                 idx = np.sort(
                     np.random.choice(P[i]['length'], math.ceil(P[i]['length'] * (1 - missingratio)), replace=False))
-                # time_i[:len(idx)] = P[i]['time'][idx]
                 left_time[i][:len(idx)] = P[i]['time'][idx][:, 0]
                 left_time_list.append(P[i]['time'][idx][:, 0])
                 idx_list.append(idx)
@@ -536,7 +526,6 @@ def tensorize_normalize_other_missing_ode(P, y, mf, stdf, missingtype, missingra
             time = np.arange(0, origin_T)
             for i in range(len(P)):
                 idx = np.sort(np.random.choice(origin_T, round(T), replace=False))
-                # time_i[:len(idx)] = P[i]['time'][idx]
                 left_time[i][:len(idx)] = time[idx][:]
                 left_time_list.append(time[idx][:])
                 idx_list.append(idx)
@@ -613,20 +602,15 @@ def tensorize_normalize_other_missing_with_nufft(P, y, mf, stdf, missingtype, mi
                     if len(idx_not_zero[0]) > 1:
                         x = P_tensor[i][:, j][idx_not_zero]
                         t = P_time[i][idx_not_zero]
-#                        nufft_complex, f = nufft(x, t)
                         nufft_complex= np.fft.fft(x)
                         interval = math.floor((T - 1) / (len(idx_not_zero[0]) - 1))
-                        # P_fft_tensor[i][0][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = f
                         P_fft_tensor[i][1][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = \
                             np.sqrt(nufft_complex.real * nufft_complex.real + nufft_complex.imag * nufft_complex.imag)
-                        # P_fft_tensor[i][2][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = \
-                        #     np.arctan(nufft_complex.imag / (nufft_complex.real + 1e-8))
 
             P_tensor = torch.Tensor(P_tensor)
 
             P_time = torch.Tensor(P_time)
             P_tensor = torch.cat((P_tensor, P_time), dim=2)
-#            P_delta_t_tensor = mask_normalize_delta(P_delta_t.squeeze(-1))
             P_delta_t_tensor = P_delta_t.squeeze(-1)
             y_tensor = y
             y_tensor = torch.Tensor(y_tensor[:, 0]).type(torch.LongTensor)
@@ -653,13 +637,9 @@ def tensorize_normalize_other_missing_with_nufft(P, y, mf, stdf, missingtype, mi
                         x = P_tensor[i][:, j][idx_not_zero]
                         t = P_time[i][idx_not_zero]
                         nufft_complex, f = nufft(x, t)
-#                        nufft_complex= np.fft.fft(x)
                         interval = math.floor((T - 1) / (len(idx_not_zero[0]) - 1))
-                        # P_fft_tensor[i][0][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = f
                         P_fft_tensor[i][1][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = \
                             np.sqrt(nufft_complex.real * nufft_complex.real + nufft_complex.imag * nufft_complex.imag)
-                        # P_fft_tensor[i][2][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = \
-                        #     np.arctan(nufft_complex.imag / (nufft_complex.real + 1e-8))
 
 
             P_tensor = torch.Tensor(P_tensor)
@@ -730,136 +710,7 @@ def get_data_split(base_path='./data/P12data', split_path='', split_type='random
         arr_outcomes = np.load(base_path + '/processed_data/arr_outcomes.npy', allow_pickle=True)
         dataset_prefix = ''  # not applicable
 
-    show_statistics = False
-    if show_statistics:
-        idx_under_65 = []
-        idx_over_65 = []
-
-        idx_male = []
-        idx_female = []
-
-        # variables for statistics
-        all_ages = []
-        female_count = 0
-        male_count = 0
-        all_BMI = []
-
-        X_static = np.zeros((len(Pdict_list), len(Pdict_list[0]['extended_static'])))
-        for i in range(len(Pdict_list)):
-            X_static[i] = Pdict_list[i]['extended_static']
-            age, gender_0, gender_1, height, _, _, _, _, weight = X_static[i]
-            if age > 0:
-                all_ages.append(age)
-                if age < 65:
-                    idx_under_65.append(i)
-                else:
-                    idx_over_65.append(i)
-            if gender_0 == 1:
-                female_count += 1
-                idx_female.append(i)
-            if gender_1 == 1:
-                male_count += 1
-                idx_male.append(i)
-            if height > 0 and weight > 0:
-                all_BMI.append(weight / ((height / 100) ** 2))
-
-        # # plot statistics
-        # plt.hist(all_ages, bins=[i * 10 for i in range(12)])
-        # plt.xlabel('Years')
-        # plt.ylabel('# people')
-        # plt.title('Histogram of patients ages, age known in %d samples.\nMean: %.1f, Std: %.1f, Median: %.1f' %
-        #           (len(all_ages), np.mean(np.array(all_ages)), np.std(np.array(all_ages)), np.median(np.array(all_ages))))
-        # plt.show()
-        #
-        # plt.hist(all_BMI, bins=[5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60])
-        # all_BMI = np.array(all_BMI)
-        # all_BMI = all_BMI[(all_BMI > 10) & (all_BMI < 65)]
-        # plt.xlabel('BMI')
-        # plt.ylabel('# people')
-        # plt.title('Histogram of patients BMI, height and weight known in %d samples.\nMean: %.1f, Std: %.1f, Median: %.1f' %
-        #           (len(all_BMI), np.mean(all_BMI), np.std(all_BMI), np.median(all_BMI)))
-        # plt.show()
-        # print('\nGender known: %d,  Male count: %d,  Female count: %d\n' % (male_count + female_count, male_count, female_count))
-
-    # np.save('saved/idx_under_65.npy', np.array(idx_under_65), allow_pickle=True)
-    # np.save('saved/idx_over_65.npy', np.array(idx_over_65), allow_pickle=True)
-    # np.save('saved/idx_male.npy', np.array(idx_male), allow_pickle=True)
-    # np.save('saved/idx_female.npy', np.array(idx_female), allow_pickle=True)
-
-    if baseline==True:
-        BL_path = ''
-    else:
-        BL_path = 'baselines/'
-
-    if split_type == 'random':
-        # load random indices from a split
-        idx_train, idx_val, idx_test = np.load(base_path + split_path, allow_pickle=True)
-    elif split_type == 'age':
-        if reverse == False:
-            idx_train = np.load(BL_path+'saved/' + dataset_prefix + 'idx_under_65.npy', allow_pickle=True)
-            idx_vt = np.load(BL_path+'saved/' + dataset_prefix + 'idx_over_65.npy', allow_pickle=True)
-        elif reverse == True:
-            idx_train = np.load(BL_path+'saved/' + dataset_prefix + 'idx_over_65.npy', allow_pickle=True)
-            idx_vt = np.load(BL_path+'saved/' + dataset_prefix + 'idx_under_65.npy', allow_pickle=True)
-
-        np.random.shuffle(idx_vt)
-        idx_val = idx_vt[:round(len(idx_vt) / 2)]
-        idx_test = idx_vt[round(len(idx_vt) / 2):]
-    elif split_type == 'gender':
-        if reverse == False:
-            idx_train = np.load(BL_path+'saved/' + dataset_prefix + 'idx_male.npy', allow_pickle=True)
-            idx_vt = np.load(BL_path+'saved/' + dataset_prefix + 'idx_female.npy', allow_pickle=True)
-        elif reverse == True:
-            idx_train = np.load(BL_path+'saved/' + dataset_prefix + 'idx_female.npy', allow_pickle=True)
-            idx_vt = np.load(BL_path+'saved/' + dataset_prefix + 'idx_male.npy', allow_pickle=True)
-
-        np.random.shuffle(idx_vt)
-        idx_val = idx_vt[:round(len(idx_vt) / 2)]
-        idx_test = idx_vt[round(len(idx_vt) / 2):]
-
-    # length = {
-    #           '1-20': 0, '21-40': 0, '41-60': 0,
-    #           # '61-80': 0, '81-100': 0, '101-120': 0, '121-140': 0, '141-160': 0, '161-180': 0,
-    #           # '181-200': 0, '201-220': 0
-    #           }
-    # for i in range(len(Pdict_list)):
-    #     if Pdict_list[i]['length'] >= 1 and Pdict_list[i]['length'] <= 20:
-    #         length['1-20'] = length['1-20'] + 1
-    #     elif Pdict_list[i]['length'] >= 21 and Pdict_list[i]['length'] <= 40:
-    #         length['21-40'] = length['21-40'] + 1
-    #     elif Pdict_list[i]['length'] >= 41 and Pdict_list[i]['length'] <= 60:
-    #         length['41-60'] = length['41-60'] + 1
-        # elif Pdict_list[i]['length'] >= 61 and Pdict_list[i]['length'] <= 80:
-        #     length['61-80'] = length['61-80'] + 1
-        # elif Pdict_list[i]['length'] >= 81 and Pdict_list[i]['length'] <= 100:
-        #     length['81-100'] = length['81-100'] + 1
-        # elif Pdict_list[i]['length'] >= 101 and Pdict_list[i]['length'] <= 120:
-        #     length['101-120'] = length['101-120'] + 1
-        # elif Pdict_list[i]['length'] >= 121 and Pdict_list[i]['length'] <= 140:
-        #     length['121-140'] = length['121-140'] + 1
-        # elif Pdict_list[i]['length'] >= 141 and Pdict_list[i]['length'] <= 160:
-        #     length['141-160'] = length['141-160'] + 1
-        # elif Pdict_list[i]['length'] >= 161 and Pdict_list[i]['length'] <= 180:
-        #     length['161-180'] = length['161-180'] + 1
-        # elif Pdict_list[i]['length'] >= 181 and Pdict_list[i]['length'] <= 200:
-        #     length['181-200'] = length['181-200'] + 1
-        # elif Pdict_list[i]['length'] >= 201 and Pdict_list[i]['length'] <= 220:
-        #     length['201-220'] = length['201-220'] + 1
-
-    # import matplotlib.pyplot as plt
-    # plt.figure(figsize=(20, 10))
-    # plt.rcParams["font.sans-serif"] = ['Times New Roman']
-    # plt.rcParams["axes.unicode_minus"] = False
-    # plt.xticks(fontsize=25)
-    # plt.yticks(fontsize=30)
-    # plt.bar(list(length.keys()), list(length.values()))
-    # for a, b in zip(list(length.keys()), list(length.values())):
-    #     plt.text(a, b, b, ha='center', va='bottom', fontsize=15)
-    # plt.title("Sample observation length distribution of P19(maxlen=60, total_num=38,803)", fontsize=30)
-    # plt.xlabel("Observation length interval", fontsize=30)
-    # plt.ylabel("Number of samples", fontsize=30)
-    #
-    # plt.show()
+    idx_train, idx_val, idx_test = np.load(base_path + split_path, allow_pickle=True)
 
     # extract train/val/test examples
     Ptrain = Pdict_list[idx_train]
@@ -877,46 +728,6 @@ def get_data_split(base_path='./data/P12data', split_path='', split_type='random
     ytest = y[idx_test]
 
     return Ptrain, Pval, Ptest, ytrain, yval, ytest
-
-
-# def evaluate(model, P_tensor, P_time_tensor, P_static_tensor, P_delta_t_tensor, P_length_tensor, batch_size=100, n_classes=2, static=None):
-#     model.eval()
-#     P_tensor = P_tensor.cuda()
-#     P_time_tensor = P_time_tensor.cuda()
-#     P_length_tensor = P_length_tensor.cuda()
-#     if static is None:
-#         Pstatic = None
-#     else:
-#         P_static_tensor = P_static_tensor.cuda()
-#         N, Fs = P_static_tensor.shape
-#
-#     T, N, Ff = P_tensor.shape
-#     n_batches, rem = N // batch_size, N % batch_size
-#     out = torch.zeros(N, n_classes)
-#     start = 0
-#     for i in range(n_batches):
-#         P = P_tensor[:, start:start + batch_size, :]
-#         Ptime = P_time_tensor[:, start:start + batch_size]
-#         P_delta_t = P_delta_t_tensor[start:start + batch_size, :]
-#         if P_static_tensor is not None:
-#             Pstatic = P_static_tensor[start:start + batch_size].cuda()
-#         # lengths = torch.sum(Ptime > 0, dim=0) + 1
-#         lengths = torch.squeeze(P_length_tensor[start: start + batch_size])
-#         middleoutput = model.forward(P.permute(1, 0, 2), P_delta_t.cuda(), Pstatic, lengths)
-#         out[start:start + batch_size] = middleoutput.detach().cpu()
-#         start += batch_size
-#     if rem > 0:
-#         P = P_tensor[:, start:start + rem, :]
-#         Ptime = P_time_tensor[:, start:start + rem]
-#         P_delta_t = P_delta_t_tensor[start:start + rem, :].cuda()
-#         if P_static_tensor is not None:
-#             Pstatic = P_static_tensor[start:start + batch_size].cuda()
-#         # lengths = torch.sum(Ptime > 0, dim=0) + 1
-#         lengths = torch.squeeze(P_length_tensor[start: start + rem])
-#         whatever = model.forward(P.permute(1, 0, 2), P_delta_t.cuda(), Pstatic, lengths)
-#         out[start:start + rem] = whatever.detach().cpu()
-#     return out
-
 
 def evaluate_nufft(model, P_tensor, P_fft_tensor, P_time_tensor, P_static_tensor, P_delta_t_tensor, P_length_tensor, batch_size=100, n_classes=2, static=None):
     model.eval()
@@ -941,7 +752,6 @@ def evaluate_nufft(model, P_tensor, P_fft_tensor, P_time_tensor, P_static_tensor
         P_delta_t = P_delta_t_tensor[start:start + batch_size, :]
         if P_static_tensor is not None:
             Pstatic = P_static_tensor[start:start + batch_size].cuda()
-        # lengths = torch.sum(Ptime > 0, dim=0) + 1
         lengths = torch.squeeze(P_length_tensor[start: start + batch_size])
         middleoutput = model.forward(P.permute(1, 0, 2), P_fft, P_delta_t.cuda(), Pstatic, lengths)
         out[start:start + batch_size] = middleoutput.detach().cpu()
@@ -953,7 +763,6 @@ def evaluate_nufft(model, P_tensor, P_fft_tensor, P_time_tensor, P_static_tensor
         P_delta_t = P_delta_t_tensor[start:start + rem, :].cuda()
         if P_static_tensor is not None:
             Pstatic = P_static_tensor[start:start + batch_size].cuda()
-        # lengths = torch.sum(Ptime > 0, dim=0) + 1
         lengths = torch.squeeze(P_length_tensor[start: start + rem])
         whatever = model.forward(P.permute(1, 0, 2), P_fft, P_delta_t.cuda(), Pstatic, lengths)
         out[start:start + rem] = whatever.detach().cpu()
@@ -966,9 +775,7 @@ def mask_normalize(P_tensor, mf, stdf):
     M = 1 * (P_tensor > 0) + 0 * (P_tensor <= 0)
     M_3D = M.transpose((2, 0, 1)).reshape(F, -1)
     for f in range(F):
-        # Pf[f] = (Pf[f] - mf[f]) / (stdf[f] + 1e-18)
         Pf[f] = (Pf[f] - mf[f]) / (stdf[f] + 1e-18)
-        # Pf[f] = (Pf[f] - np.min(Pf[f])) / np.max(Pf[f]) - np.min(Pf[f])
     Pf = Pf * M_3D
     Pnorm_tensor = Pf.reshape((F, N, T)).transpose((1, 2, 0))
     Pfinal_tensor = np.concatenate([Pnorm_tensor, M], axis=2)

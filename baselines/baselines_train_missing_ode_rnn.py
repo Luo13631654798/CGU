@@ -20,7 +20,6 @@ from baseline_models import *
 import time
 from sklearn.metrics import roc_auc_score, classification_report, confusion_matrix, average_precision_score, precision_score, recall_score, f1_score
 import warnings
-from utils_baselines import *
 from utils import *
 from utils_baselines import evaluate_ode
 warnings.filterwarnings("ignore")
@@ -63,7 +62,7 @@ sensor_wise_mask = False
 
 for missing_ratio in missing_ratios:
     num_epochs = args.epochs
-    learning_rate = args.lr  # 0.001 works slightly better, sometimes 0.0001 better, depends on settings and datasets
+    learning_rate = args.lr
     early_stop_epochs = 100
     total_time = 0
     if args.dataset == 'P12' or args.dataset == 'physionet':

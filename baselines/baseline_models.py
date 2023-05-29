@@ -896,180 +896,6 @@ class grud_model(torch.nn.Module):
         # print(output.size())
         return output
 
-class Raindrop(nn.Module):
-    ""
-    """Implement the raindrop stratey one by one."""
-    """ Transformer models with context embedding, aggregation, split dimension positional and element embedding
-    Inputs:
-        d_inp = number of input features
-        d_model = number of expected models input features
-        nhead = number of heads in multihead-attention
-        nhid = dimension of feedforward network models
-        dropout = dropout rate (default 0.1)
-        max_len = maximum sequence length 
-        MAX  = positional encoder MAX parameter
-        n_classes = number of classes 
-    """
-
-    def __init__(self, d_inp=36, d_model=64, nhead=4, nhid=128, nlayers=2, dropout=0.3, max_len=215, d_static=9,
-                 MAX=100, perc=0.5, aggreg='mean', n_classes=2, global_structure = None, static=True):
-        super(Raindrop, self).__init__()
-        from torch.nn import TransformerEncoder, TransformerEncoderLayer
-        self.model_type = 'Transformer'
-
-        self.global_structure = global_structure
-
-        d_pe = 36
-        d_enc = 36
-
-        self.pos_encoder = PositionalEncodingTF(d_pe, max_len, MAX)
-
-        encoder_layers = TransformerEncoderLayer(d_model+36, nhead, nhid, dropout)  # nhid is the number of hidden, 36 is the dim of timestamp
-
-        self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
-
-        self.gcs = nn.ModuleList()
-        conv_name = 'dense_hgt' # 'hgt' # 'dense_hgt',  'gcn', 'dense_hgt'
-        num_types, num_relations = 36, 1
-
-        self.edge_type_train = torch.ones([36*36*2], dtype=torch.int64).cuda()  # 2 times fully-connected graph
-        self.adj = torch.ones([36, 36]).cuda()  # complete graph
-
-        """For GIN"""
-        self.dim = int(d_model/d_inp)  # the output dim of each node in graph
-        in_D, hidden_D = 1, self.dim  # each timestamp input 2 value, map to self.dim dimension feature, output is self.dim
-        self.GINstep1 = GINConv(
-            Sequential(Linear(in_D, hidden_D), BatchNorm1d(hidden_D), ReLU(),
-                       Linear(hidden_D, hidden_D), ReLU()))
-
-        self.transconv  = TransformerConv(in_channels=36, out_channels=36*self.dim, heads=1)
-
-        self.GINmlp = nn.Sequential(
-            nn.Linear(self.dim+d_static, self.dim+d_static),  # self.dim for observation, d_static for static info
-            nn.ReLU(),
-            nn.Linear(self.dim+d_static, n_classes),
-        )
-
-        if static == False:
-            d_final = d_enc + d_pe
-        else:
-            d_final = d_enc + d_pe + d_inp
-
-        self.mlp_static = nn.Sequential(
-            nn.Linear(d_final, d_final),
-            nn.ReLU(),
-            nn.Linear(d_final, n_classes),
-        )
-
-        self.d_inp = d_inp
-        self.d_model = d_model
-        self.encoder = nn.Linear(d_inp, d_enc)
-        self.static = static
-        if self.static:
-            self.emb = nn.Linear(d_static, d_model)
-
-        self.MLP_replace_transformer = nn.Linear(72, 36)
-
-        self.mlp = nn.Sequential(
-            nn.Linear(d_model, d_model),
-            nn.ReLU(),
-            nn.Linear(d_model, n_classes),
-        )
-
-        self.aggreg = aggreg
-
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(dropout)
-        self.init_weights()
-
-    def init_weights(self):
-        initrange = 1e-10
-        self.encoder.weight.data.uniform_(-initrange, initrange)
-        if self.static:
-            self.emb.weight.data.uniform_(-initrange, initrange)
-
-    def forward(self, src, static, times, lengths):
-        """Input to the models:
-        src = P: [215, 128, 36] : 36 nodes, 128 samples, each sample each channel has a feature with 215-D vector
-        static = Pstatic: [128, 9]: this one doesn't matter; static features
-        times = Ptime: [215, 128]: the timestamps
-        lengths = lengths: [128]: the number of nonzero recordings.
-        """
-        missing_mask = src[:, :, self.d_inp:int(2*self.d_inp)]
-        src = src[:, :, :self.d_inp]
-        maxlen, batch_size = src.shape[0], src.shape[1]
-
-        src = self.encoder(src) * math.sqrt(self.d_model)
-
-        pe = self.pos_encoder(times)
-        src = self.dropout(src)
-        if static is not None:
-            emb = self.emb(static)
-
-        withmask = False
-        if withmask==True:
-            x = torch.cat([src, missing_mask], dim=-1)
-        else:
-            x = src
-
-        # mask out the all-zero rows
-        mask = torch.arange(maxlen)[None, :] >= (lengths.cpu()[:, None] )
-        mask = mask.squeeze(1).cuda()
-
-        step2 = True  # If skip step 2, direct process the input data
-        if step2 == False:
-            output = x
-            distance = 0
-        elif step2 == True:
-            adj = self.global_structure.cuda()
-            adj[torch.eye(36).byte()] = 1
-
-            edge_index = torch.nonzero(adj).T
-            edge_weights = adj[edge_index[0], edge_index[1]]
-
-            # graph message passing
-            output = torch.zeros([maxlen, src.shape[1], 36*self.dim]).cuda()
-            alpha_all = torch.zeros([edge_index.shape[1],  src.shape[1] ]).cuda()
-            for unit in range(0, x.shape[1]):
-                stepdata = x[:, unit, :]
-                stepdata, attentionweights = self.transconv(stepdata, edge_index=edge_index, edge_weights=edge_weights,
-                                                            edge_attr=None, return_attention_weights=True)
-
-                stepdata = stepdata.reshape([-1, 36*self.dim]).unsqueeze(0)
-                output[:, unit, :] = stepdata
-
-                alpha_all[:, unit] = attentionweights[1].squeeze(-1)
-
-            # calculate Euclidean distance between alphas
-            distance = torch.cdist(alpha_all.T, alpha_all.T, p=2)
-            distance = torch.mean(distance)
-
-        # use transformer to aggregate temporal information
-        output = torch.cat([output, pe], dim=-1)
-
-        step3 = True
-        if step3==True:
-            r_out = self.transformer_encoder(output, src_key_padding_mask=mask)
-        elif step3==False:
-            r_out = output
-
-        masked_agg = True
-        if masked_agg ==True:
-            # masked aggregation across rows
-            mask2 = mask.permute(1, 0).unsqueeze(2).long()
-            if self.aggreg == 'mean':
-                lengths2 = lengths.unsqueeze(1)
-                output = torch.sum(r_out * (1 - mask2), dim=0) / (lengths2 + 1)
-        elif masked_agg ==False:
-            # Without masked aggregation across rows
-            output = r_out[-1, :, :].squeeze(0)
-
-        if static is not None:
-            output = torch.cat([output, emb], dim=1)
-        output = self.mlp_static(output)
-
-        return output, distance, None
-
 class Raindrop_v2(nn.Module):
     """Implement the raindrop stratey one by one."""
     """ Transformer models with context embedding, aggregation, split dimension positional and element embedding
@@ -1536,7 +1362,6 @@ class Encoder_z0_ODE_RNN(nn.Module):
 
         return yi, yi_std, latent_ys, extra_info
 
-
 class enc_mtan_classif(nn.Module):
 
     def __init__(self, input_dim, query, nhidden=16,
@@ -1858,7 +1683,6 @@ class ODEFunc(nn.Module):
         """
         return self.get_ode_gradient_nn(t_local, y)
 
-
 class DiffeqSolver(nn.Module):
     def __init__(self, input_dim, ode_func, method, latents,
             odeint_rtol = 1e-4, odeint_atol = 1e-5, device = torch.device("cpu")):
@@ -1903,7 +1727,6 @@ class DiffeqSolver(nn.Module):
         # shape: [n_traj_samples, n_traj, n_tp, n_dim]
         pred_y = pred_y.permute(1,2,0,3)
         return pred_y
-
 
 class DGM2_O(nn.Module):
 

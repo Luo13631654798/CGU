@@ -59,7 +59,7 @@ elif dataset == 'PAM':
 
 batch_size = args.batch_size
 
-learning_rate = args.lr  # 0.001 works slightly better, sometimes 0.0001 better, depends on settings and datasets
+learning_rate = args.lr
 at = args.at
 bt = args.bt
 num_epochs = args.epochs

@@ -67,7 +67,7 @@ else:
 print('missing ratio list', missing_ratios)
 
 for missing_ratio in missing_ratios:
-    learning_rate = args.lr  # 0.001 works slightly better, sometimes 0.0001 better, depends on settings and datasets
+    learning_rate = args.lr
     at = args.at
     bt = args.bt
     varatt_dim = args.varatt_dim
@@ -196,9 +196,6 @@ for missing_ratio in missing_ratios:
 
         n0, n1 = len(idx_0), len(idx_1)
         expanded_idx_1 = np.concatenate([idx_1, idx_1, idx_1], axis=0)
-        # expanded_idx_1 = np.repeat(idx_1, 3, axis=0)
-        # expanded_idx_1 = idx_1
-        #expanded_idx_1 = np.concatenate([idx_1, idx_1, idx_1, idx_1, idx_1, idx_1], axis=0)
         expanded_n1 = len(expanded_idx_1)
 
         if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
@@ -260,9 +257,6 @@ for missing_ratio in missing_ratios:
                 train_probs = torch.squeeze(nn.functional.softmax(outputs, dim=1))
                 train_probs = train_probs.cpu().detach().numpy()
                 train_y = y.cpu().detach().numpy()
-
-            # if epoch == 0 or epoch == num_epochs - 1:
-            #     print(confusion_matrix(train_y, np.argmax(train_probs, axis=1), labels=[0, 1]))
 
             """Validation"""
             model.eval()
