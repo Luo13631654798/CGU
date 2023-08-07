@@ -1,19 +1,19 @@
 import argparse
 import sys
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', type=str, default='physionet', choices=['P12', 'P19', 'PAM', 'physionet'])  #
-parser.add_argument('--cuda', type=str, default='0')  #
-parser.add_argument('--epochs', type=int, default=10)  #
-parser.add_argument('--early_stop_epochs', type=int, default=10)  #
-parser.add_argument('--batch_size', type=int, default=16)  #
-parser.add_argument('--varatt_dim', type=int, default=0)  #
-parser.add_argument('--lr', type=float, default=1e-3)  #
-parser.add_argument('--at', type=float, default=0)  #
-parser.add_argument('--bt', type=float, default=0)  #
-parser.add_argument('--attention_d_model', type=int, default=8)  #
-parser.add_argument('--graph_node_d_model', type=int, default=4)  #
-parser.add_argument('--kernel_size', type=int, default=3)  #
-parser.add_argument('--n_layer', type=int, default=1)  #
+parser.add_argument('--dataset', type=str, default='physionet', choices=['P12', 'P19', 'PAM', 'physionet', 'mimic3'])
+parser.add_argument('--cuda', type=str, default='0')
+parser.add_argument('--epochs', type=int, default=20)  #
+parser.add_argument('--early_stop_epochs', type=int, default=10)
+parser.add_argument('--batch_size', type=int, default=16)
+parser.add_argument('--varatt_dim', type=int, default=0)
+parser.add_argument('--lr', type=float, default=1e-3)
+parser.add_argument('--at', type=float, default=0)
+parser.add_argument('--bt', type=float, default=0)
+parser.add_argument('--attention_d_model', type=int, default=8)
+parser.add_argument('--graph_node_d_model', type=int, default=4)
+parser.add_argument('--kernel_size', type=int, default=3)
+parser.add_argument('--n_layer', type=int, default=1)
 # parser.add_argument('--ablation', type=str, default='full',
 #                     choices=['full', 'wo_temporal_attention', 'wo_frequency_variable_attention',
 #                              'wo_variable_attention', 'wo_time_interval_modeling'])
@@ -33,15 +33,13 @@ device = torch.device(
     'cuda:0' if torch.cuda.is_available() else 'cpu')
 print(torch.__version__)
 print(torch.cuda.is_available())
-sign = 88
-torch.manual_seed(1)
-torch.cuda.manual_seed(1)
-np.random.seed(1)
+sign = 8888
+
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
 os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 torch.use_deterministic_algorithms(True)
-arch = 'mymodelnufft0506'
+arch = 'mymodelnufft'
 model_path = './models/'
 if not os.path.exists(model_path):
     os.mkdir(model_path)
@@ -56,6 +54,8 @@ elif dataset == 'P19':
     base_path = 'data/P19data'
 elif dataset == 'PAM':
     base_path = 'data/PAMdata'
+elif dataset == 'mimic3':
+    base_path = 'data/mimic3'
 
 batch_size = args.batch_size
 
@@ -87,6 +87,11 @@ elif args.dataset == 'PAM':
     variables_num = 17
     timestamp_num = 600
     n_class = 8
+elif args.dataset == 'mimic3':
+    d_static = 0
+    variables_num = 16
+    timestamp_num = 292
+    n_class = 2
 
 n_splits = 5
 
@@ -98,6 +103,9 @@ recall_arr = np.zeros(n_splits)
 F1_arr = np.zeros(n_splits)
 
 for k in range(0, n_splits):
+    torch.manual_seed(k)
+    torch.cuda.manual_seed(k)
+    np.random.seed(k)
     split_idx = k + 1
     print('Split id: %d' % split_idx)
     if dataset == 'P12':
@@ -108,7 +116,8 @@ for k in range(0, n_splits):
         split_path = '/splits/phy19_split' + str(split_idx) + '_new.npy'
     elif dataset == 'PAM':
         split_path = '/splits/PAMAP2_split_' + str(split_idx) + '.npy'
-
+    else:
+        split_path = ''
     # prepare the data:
     Ptrain, Pval, Ptest, ytrain, yval, ytest = get_data_split(base_path, split_path, dataset=dataset)
     print(len(Ptrain), len(Pval), len(Ptest), len(ytrain), len(yval), len(ytest))
@@ -149,8 +158,26 @@ for k in range(0, n_splits):
         Ptest_tensor, Ptest_fft_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
             = tensorize_normalize_other_with_nufft(Ptest, ytest, mf, stdf)
 
+    elif dataset == 'mimic3':
+        T, F = timestamp_num, variables_num
+
+        Ptrain_tensor = np.zeros((len(Ptrain), T, F))
+
+        for i in range(len(Ptrain)):
+            Ptrain_tensor[i][:Ptrain[i][4]] = Ptrain[i][2]
+
+        mf, stdf = getStats(Ptrain_tensor)
+
+        Ptrain_tensor, Ptrain_fft_tensor, Ptrain_static_tensor, Ptrain_delta_t_tensor, Ptrain_length_tensor, Ptrain_time_tensor, ytrain_tensor \
+            = tensorize_normalize_with_nufft_mimic3(Ptrain, ytrain, mf, stdf)
+        Pval_tensor, Pval_fft_tensor, Pval_static_tensor, Pval_delta_t_tensor, Pval_length_tensor, Pval_time_tensor, yval_tensor \
+            = tensorize_normalize_with_nufft_mimic3(Pval, yval, mf, stdf)
+        Ptest_tensor, Ptest_fft_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
+            = tensorize_normalize_with_nufft_mimic3(Ptest, ytest, mf, stdf)
+
     model = CGU(device, attention_d_model, graph_node_d_model, variables_num, timestamp_num,
-                d_static, n_class, args.n_layer, args.kernel_size, at=at, bt=bt, varatt_dim=varatt_dim)
+                d_static, n_class, args.n_layer, args.kernel_size, at=at, bt=bt, varatt_dim=varatt_dim, beta_start=0.0001, beta_end=0.0002)
+
     params = (list(model.parameters()))
     print('model', model)
     print('parameters:', count_parameters(model))
@@ -168,18 +195,19 @@ for k in range(0, n_splits):
 
     idx_0 = np.where(ytrain == 0)[0]
     idx_1 = np.where(ytrain == 1)[0]
-
+#    idx_ = np.where(ytrain >= 0)[0]
     n0, n1 = len(idx_0), len(idx_1)
     expanded_idx_1 = np.concatenate([idx_1, idx_1, idx_1], axis=0)
     expanded_n1 = len(expanded_idx_1)
 
-    if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+    if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
         K0 = n0 // int(batch_size / 2)
         K1 = expanded_n1 // int(batch_size / 2)
         n_batches = np.min([K0, K1])
+#        n_batches = 1
     elif dataset == 'PAM':
         n_batches = 30
-
+#    n_batches = len(idx_) // int(batch_size)
     best_val_epoch = 0
     best_aupr_val = best_auc_val = 0.0
     best_loss_val = 100.0
@@ -193,22 +221,24 @@ for k in range(0, n_splits):
             break
         model.train()
 
-        if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+        if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
             np.random.shuffle(expanded_idx_1)
             I1 = expanded_idx_1
             np.random.shuffle(idx_0)
             I0 = idx_0
-
+#            np.random.shuffle(idx_)
+#            I = idx_
         for n in range(n_batches):
-            if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+            if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
                 idx0_batch = I0[n * int(batch_size / 2):(n + 1) * int(batch_size / 2)]
                 idx1_batch = I1[n * int(batch_size / 2):(n + 1) * int(batch_size / 2)]
                 idx = np.concatenate([idx0_batch, idx1_batch], axis=0)
+#                idx = I[n * int(batch_size):(n + 1) * int(batch_size)]
                 P, P_fft, Ptime, Pdelta_t, Plength, Pstatic, y = \
                     Ptrain_tensor[:, idx, :].cuda(), Ptrain_fft_tensor[idx].cuda(), \
                         Ptrain_time_tensor[:, idx].cuda(), \
                         Ptrain_delta_t_tensor[idx, :].cuda(), Ptrain_length_tensor[idx], \
-                        Ptrain_static_tensor[idx].cuda(), ytrain_tensor[idx].cuda()
+                        Ptrain_static_tensor[idx].cuda() if dataset != 'mimic3' else None, ytrain_tensor[idx].cuda()
             elif dataset == 'PAM':
                 idx = np.random.choice(list(range(Ptrain_tensor.shape[1])), size=int(batch_size), replace=False)
                 P, P_fft, Ptime, Pdelta_t, Plength, Pstatic, y = Ptrain_tensor[:, idx, :].cuda(), \
@@ -224,7 +254,7 @@ for k in range(0, n_splits):
             loss.backward()
             optimizer.step()
 
-        if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+        if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
             train_probs = torch.squeeze(torch.sigmoid(outputs))  # 128 * 2
             train_probs = train_probs.cpu().detach().numpy()  # 128 * 2
             train_y = y.cpu().detach().numpy()  # 128
@@ -247,7 +277,7 @@ for k in range(0, n_splits):
             acc_val = np.sum(yval.ravel() == y_val_pred.ravel()) / yval.shape[0]
             val_loss = criterion(torch.from_numpy(out_val), torch.from_numpy(yval.squeeze(1)).long())
 
-            if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+            if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
                 auc_val = roc_auc_score(yval, out_val[:, 1])
                 aupr_val = average_precision_score(yval, out_val[:, 1])
                 print(
@@ -293,7 +323,7 @@ for k in range(0, n_splits):
         ypred = np.argmax(out_test, axis=1)
         acc = np.sum(y_test.ravel() == ypred.ravel()) / y_test.shape[0]
 
-        if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+        if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
             auc = roc_auc_score(y_test, probs[:, 1])
             aupr = average_precision_score(y_test, probs[:, 1])
         elif dataset == 'PAM':

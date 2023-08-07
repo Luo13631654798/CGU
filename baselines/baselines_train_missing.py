@@ -3,7 +3,7 @@ import sys
 sys.path.append("..")
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', type=str, default='PAM', choices=['P12', 'P19', 'PAM', 'physionet']) #
+parser.add_argument('--dataset', type=str, default='PAM', choices=['P12', 'P19', 'PAM', 'physionet', 'mimic3']) #
 parser.add_argument('--cuda', type=str, default='0') #
 parser.add_argument('--epochs', type=int, default=20) #
 parser.add_argument('--batch_size', type=int, default=32) #
@@ -28,9 +28,7 @@ device = torch.device(
 print(torch.__version__)
 print(torch.cuda.is_available())
 sign = 4
-torch.manual_seed(1)
-torch.cuda.manual_seed(1)
-np.random.seed(1)
+
 arch = args.baseline
 model_path = 'models/'
 if not os.path.exists(model_path):
@@ -46,7 +44,8 @@ elif dataset == 'P19':
     base_path = '../data/P19data'
 elif dataset == 'PAM':
     base_path = '../data/PAMdata'
-
+elif dataset == 'mimic3':
+    base_path = '../data/mimic3'
 
 baseline = args.baseline
 batch_size = args.batch_size
@@ -74,6 +73,11 @@ for missing_ratio in missing_ratios:
         variables_num = 17
         timestamp_num = 600
         n_class = 8
+    elif args.dataset == 'mimic3':
+        d_static = 0
+        variables_num = 16
+        timestamp_num = 292
+        n_class = 2
     aggreg = 'mean'
 
     n_splits = 5
@@ -87,6 +91,9 @@ for missing_ratio in missing_ratios:
     if args.missingtype == 'time':
         timestamp_num = int(timestamp_num * (1 - missing_ratio))
     for k in range(0, n_splits):
+        torch.manual_seed(k)
+        torch.cuda.manual_seed(k)
+        np.random.seed(k)
         split_idx = k + 1
         print('Split id: %d' % split_idx)
         if dataset == 'P12':
@@ -97,8 +104,8 @@ for missing_ratio in missing_ratios:
             split_path = '/splits/phy19_split' + str(split_idx) + '_new.npy'
         elif dataset == 'PAM':
             split_path = '/splits/PAMAP2_split_' + str(split_idx) + '.npy'
-
-
+        else:
+            split_path = ''
         Ptrain, Pval, Ptest, ytrain, yval, ytest = get_data_split(base_path, split_path, dataset=dataset)
         print(len(Ptrain), len(Pval), len(Ptest), len(ytrain), len(yval), len(ytest))
 
@@ -172,14 +179,33 @@ for missing_ratio in missing_ratios:
                 Ptest_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
                     = tensorize_normalize_other_missing(Ptest, ytest, mf, stdf, missingtype=args.missingtype,
                                                         missingratio=missing_ratio, idx=idx)
+        elif dataset == 'mimic3':
+            T, F = 292, 16
+
+            Ptrain_tensor = np.zeros((len(Ptrain), T, F))
+
+            for i in range(len(Ptrain)):
+                Ptrain_tensor[i][:Ptrain[i][4]] = Ptrain[i][2]
+
+            mf, stdf = getStats(Ptrain_tensor)
+
+            Ptrain_tensor, Ptrain_fft_tensor, Ptrain_static_tensor, Ptrain_delta_t_tensor, Ptrain_length_tensor, Ptrain_time_tensor, ytrain_tensor \
+                = tensorize_normalize_with_nufft_mimic3_missing(Ptrain, ytrain, mf, stdf, args.missingtype, missing_ratio, idx = None)
+            Pval_tensor, Pval_fft_tensor, Pval_static_tensor, Pval_delta_t_tensor, Pval_length_tensor, Pval_time_tensor, yval_tensor \
+                = tensorize_normalize_with_nufft_mimic3_missing(Pval, yval, mf, stdf, args.missingtype, missing_ratio, idx = None)
+            Ptest_tensor, Ptest_fft_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
+                = tensorize_normalize_with_nufft_mimic3_missing(Ptest, ytest, mf, stdf, args.missingtype, missing_ratio, idx = None)
+
+
         nhid = 2 * variables_num
+
         if baseline == 'SEFT':
             nhead = 2
             nlayers = 2
             dropout = 0.2
             MAX = 100
             model = SEFT(variables_num, variables_num, nhead, nhid, nlayers, dropout, timestamp_num, d_static, MAX, 0.5, aggreg,
-                         n_class, static=False if dataset == 'PAM' else True).to(device)
+                         n_class, static=False if d_static == 0 else True).to(device)
         elif baseline == 'MTGNN':
             model = MTGNN(True, True, 2, variables_num * 2, torch.device('cuda:0'),
                           num_static_features=d_static,
@@ -247,7 +273,7 @@ for missing_ratio in missing_ratios:
         expanded_n1 = len(expanded_idx_1)
 
         batch_size = args.batch_size
-        if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+        if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
             K0 = n0 // int(batch_size / 2)
             K1 = expanded_n1 // int(batch_size / 2)
             n_batches = np.min([K0, K1])
@@ -262,20 +288,20 @@ for missing_ratio in missing_ratios:
         for epoch in range(num_epochs):
             model.train()
 
-            if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+            if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
                 np.random.shuffle(expanded_idx_1)
                 I1 = expanded_idx_1
                 np.random.shuffle(idx_0)
                 I0 = idx_0
 
             for n in range(n_batches):
-                if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+                if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
                     idx0_batch = I0[n * int(batch_size / 2):(n + 1) * int(batch_size / 2)]
                     idx1_batch = I1[n * int(batch_size / 2):(n + 1) * int(batch_size / 2)]
                     idx = np.concatenate([idx0_batch, idx1_batch], axis=0)
                     P, Ptime, Pdelta_t, Plength, Pstatic, y = Ptrain_tensor[:, idx, :].cuda(), Ptrain_time_tensor[:, idx].cuda(),\
                         Ptrain_delta_t_tensor[idx, :].cuda(), Ptrain_length_tensor[idx], \
-                        Ptrain_static_tensor[idx].cuda(), ytrain_tensor[idx].cuda()
+                        Ptrain_static_tensor[idx].cuda() if d_static != 0 else None, ytrain_tensor[idx].cuda()
                 elif dataset == 'PAM':
                     idx = np.random.choice(list(range(Ptrain_tensor.shape[1])), size=int(batch_size), replace=False)
                     P, Ptime, Pdelta_t, Plength, Pstatic, y = Ptrain_tensor[:, idx, :].cuda(), Ptrain_time_tensor[:, idx].cuda(), \
@@ -307,7 +333,7 @@ for missing_ratio in missing_ratios:
                 loss.backward()
                 optimizer.step()
 
-            if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+            if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
                 train_probs = torch.squeeze(torch.sigmoid(outputs))  # 128 * 2
                 train_probs = train_probs.cpu().detach().numpy()  # 128 * 2
                 train_y = y.cpu().detach().numpy()  # 128
@@ -334,9 +360,9 @@ for missing_ratio in missing_ratios:
                     n_batches = math.ceil(Pval_tensor.size()[1] / batch_size)
                     out_val_tensors = []
                     for n in range(n_batches):
-                        if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+                        if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
                             out_val_tensors.append(evaluate_MTGNN(model, Pval_tensor[:, n * batch_size: (n + 1) * batch_size, :-1],
-                                               Pval_static_tensor[n * batch_size: (n + 1) * batch_size, :],
+                                               Pval_static_tensor[n * batch_size: (n + 1) * batch_size, :] if dataset != 'mimic3' else None,
                                                                   static=None if d_static == 0 else 1))
                         elif dataset == 'PAM':
                             out_val_tensors.append(evaluate_MTGNN(model, Pval_tensor[:, n * batch_size: (n + 1) * batch_size, :-1],
@@ -346,9 +372,9 @@ for missing_ratio in missing_ratios:
                     n_batches = math.ceil(Pval_tensor.size()[1] / batch_size)
                     out_val_tensors = []
                     for n in range(n_batches):
-                        if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+                        if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
                             out_val_tensors.append(evaluate_DGM2(model, Pval_tensor[:, n * batch_size: (n + 1) * batch_size, :-1],
-                                               Pval_static_tensor[n * batch_size: (n + 1) * batch_size, :],
+                                               Pval_static_tensor[n * batch_size: (n + 1) * batch_size, :] if d_static != 0 else None,
                                                                   static=None if d_static == 0 else 1))
                         elif dataset == 'PAM':
                             out_val_tensors.append(evaluate_DGM2(model, Pval_tensor[:, n * batch_size: (n + 1) * batch_size, :-1],
@@ -365,7 +391,7 @@ for missing_ratio in missing_ratios:
                 acc_val = np.sum(yval.ravel() == y_val_pred.ravel()) / yval.shape[0]
                 val_loss = criterion(torch.from_numpy(out_val), torch.from_numpy(yval.squeeze(1)).long())
 
-                if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+                if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
                     auc_val = roc_auc_score(yval, out_val[:, 1])
                     aupr_val = average_precision_score(yval, out_val[:, 1])
                     print(
@@ -409,10 +435,10 @@ for missing_ratio in missing_ratios:
                 n_batches = math.ceil(Ptest_tensor.size()[1] / batch_size)
                 out_test_tensors = []
                 for n in range(n_batches):
-                    if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+                    if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
                         out_test_tensors.append(
                             evaluate_MTGNN(model, Ptest_tensor[:, n * batch_size: (n + 1) * batch_size, :-1],
-                                           Ptest_static_tensor[n * batch_size: (n + 1) * batch_size, :],
+                                           Ptest_static_tensor[n * batch_size: (n + 1) * batch_size, :] if dataset != 'mimic3' else None,
                                            static=None if d_static == 0 else 1))
                     elif dataset == 'PAM':
                         out_test_tensors.append(
@@ -423,7 +449,7 @@ for missing_ratio in missing_ratios:
                 n_batches = math.ceil(Ptest_tensor.size()[1] / batch_size)
                 out_test_tensors = []
                 for n in range(n_batches):
-                    if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+                    if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
                         out_test_tensors.append(
                             evaluate_DGM2(model, Ptest_tensor[:, n * batch_size: (n + 1) * batch_size, :-1],
                                            Ptest_static_tensor[n * batch_size: (n + 1) * batch_size, :],
@@ -447,7 +473,7 @@ for missing_ratio in missing_ratios:
             ypred = np.argmax(out_test, axis=1)
             acc = np.sum(y_test.ravel() == ypred.ravel()) / y_test.shape[0]
 
-            if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet':
+            if dataset == 'P12' or dataset == 'P19' or dataset == 'physionet' or dataset == 'mimic3':
                 auc = roc_auc_score(y_test, probs[:, 1])
                 aupr = average_precision_score(y_test, probs[:, 1])
             elif dataset == 'PAM':

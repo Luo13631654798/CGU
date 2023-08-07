@@ -171,6 +171,147 @@ def tensorize_normalize_with_nufft(P, y, mf, stdf, ms, ss, interp):
     return P_tensor, torch.FloatTensor(P_fft_tensor), P_static_tensor, torch.FloatTensor(P_delta_t_tensor), \
         torch.FloatTensor(P_length), P_time, y_tensor
 
+def tensorize_normalize_with_nufft_mimic3(P, y, mf, stdf):
+    T, F = 292, 16
+
+    P_tensor = np.zeros((len(P), T, F))
+    P_fft_tensor = np.zeros((len(P), 3, T, F))
+    P_time = np.zeros((len(P), T, 1))
+    P_delta_t = np.zeros((len(P), T, 1))
+    P_length = np.zeros([len(P), 1])
+    for i in range(len(P)):
+        P_length[i] = P[i][4]
+        P_tensor[i][:P[i][4]] = P[i][2]
+        P_time[i][:P[i][4]] = P[i][1].reshape(-1, 1) / 60.0
+        P_time_right_shifting = np.insert(P_time[i][:-1], 0, values=P_time[i][0])
+        P_delta_t[i] = (P_time[i] - np.expand_dims(P_time_right_shifting, -1)) / 60.0
+        if P_length[i] < T:
+            P_delta_t[i][P[i][4]] = 0
+    P_tensor = mask_normalize(P_tensor, mf, stdf)
+    for i in range(len(P)):
+        for j in range(F):
+            idx_not_zero = np.where(P_tensor[i][:, j])
+            if len(idx_not_zero[0]) > 1:
+                x = P_tensor[i][:, j][idx_not_zero]
+                t = P_time[i][idx_not_zero]
+                nufft_complex, f = nufft(x, t)
+                interval = math.floor((T - 1) / (len(idx_not_zero[0]) - 1))
+                P_fft_tensor[i][0][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = f
+                P_fft_tensor[i][1][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = \
+                    np.sqrt(nufft_complex.real * nufft_complex.real + nufft_complex.imag * nufft_complex.imag)
+                P_fft_tensor[i][2][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = \
+                    np.arctan(nufft_complex.imag / (nufft_complex.real + 1e-8))
+
+    P_tensor = torch.Tensor(P_tensor)
+
+    P_time = torch.Tensor(P_time)  # convert mins to hours
+    P_tensor = torch.cat((P_tensor, P_time), dim=2)
+
+    P_delta_t_tensor = mask_normalize_delta(P_delta_t.squeeze(-1))
+    y_tensor = y
+    y_tensor = torch.Tensor(y_tensor[:, 0]).type(torch.LongTensor)
+    return P_tensor, torch.FloatTensor(P_fft_tensor), None, torch.FloatTensor(P_delta_t_tensor), \
+        torch.FloatTensor(P_length), P_time, y_tensor
+
+def tensorize_normalize_with_nufft_mimic3_missing(P, y, mf, stdf, missingtype, missingratio, idx = None):
+    origin_T, F = 292, 16
+    if missingratio <= 0:
+        return tensorize_normalize_with_nufft_mimic3(P, y, mf, stdf)
+    else:
+        if missingtype == 'time':
+            T = int((1 - missingratio) * origin_T)
+            P_tensor = np.zeros((len(P), T, F))
+            P_time = np.zeros((len(P), T, 1))
+            P_delta_t = np.zeros((len(P), T, 1))
+            P_length = np.zeros([len(P), 1])
+            P_fft_tensor = np.zeros((len(P), 3, T, F))
+            for i in range(len(P)):
+                selected_num = math.ceil(P[i][4] * (1 - missingratio))
+                if selected_num > T:
+                    selected_num = T
+                idx = np.sort(
+                    np.random.choice(P[i][4], selected_num, replace=False))
+                length = idx.size
+                P_tensor[i][:length] = P[i][2][idx, :]
+                P_time[i][:length] = P[i][1][idx].reshape(-1, 1) / 60
+                P_time_right_shifting = np.insert(P_time[i][:-1], 0, values=P_time[i][0])
+                P_length[i] = length
+                P_delta_t[i] = (P_time[i] - np.expand_dims(P_time_right_shifting, -1)) / 60
+                if length < T:
+                    P_delta_t[i][length] = 0
+
+            P_tensor = mask_normalize(P_tensor, mf, stdf)
+            for i in range(len(P)):
+                for j in range(F):
+                    idx_not_zero = np.where(P_tensor[i][:, j])
+                    if len(idx_not_zero[0]) > 1:
+                        x = P_tensor[i][:, j][idx_not_zero]
+                        t = P_time[i][idx_not_zero]
+                        nufft_complex, f = nufft(x, t)
+                        interval = math.floor((T - 1) / (len(idx_not_zero[0]) - 1))
+                        # P_fft_tensor[i][0][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = f
+                        P_fft_tensor[i][1][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = \
+                            np.sqrt(nufft_complex.real * nufft_complex.real + nufft_complex.imag * nufft_complex.imag)
+                        # P_fft_tensor[i][2][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = \
+                        #     np.arctan(nufft_complex.imag / (nufft_complex.real + 1e-8))
+
+            P_tensor = torch.Tensor(P_tensor)
+
+            P_time = torch.Tensor(P_time)  # convert mins to hours
+            P_tensor = torch.cat((P_tensor, P_time), dim=2)
+
+            P_delta_t_tensor = mask_normalize_delta(P_delta_t.squeeze(-1))
+            y_tensor = y
+            y_tensor = torch.Tensor(y_tensor[:, 0]).type(torch.LongTensor)
+            return P_tensor, torch.FloatTensor(P_fft_tensor), None, torch.FloatTensor(P_delta_t_tensor), \
+                torch.FloatTensor(P_length), P_time, y_tensor
+        else:
+            T = origin_T
+            P_tensor = np.zeros((len(P), T, F))
+            P_time = np.zeros((len(P), T, 1))
+            P_delta_t = np.zeros((len(P), T, 1))
+            P_length = np.zeros([len(P), 1])
+            P_static_tensor = np.zeros((len(P), D))
+            P_fft_tensor = np.zeros((len(P), 3, T, F))
+            for i in range(len(P)):
+                P_tensor[i][:, idx] = P[i]['arr'][:, idx]
+                P_time[i] = P[i]['time']
+                P_time_right_shifting = np.insert(P_time[i][:-1], 0, values=P_time[i][0])
+                P_static_tensor[i] = P[i]['extended_static']
+                P_length[i] = P[i]['length']
+                P_delta_t[i] = (P_time[i] - np.expand_dims(P_time_right_shifting, -1)) / 60.0
+                if P[i]['length'] < T:
+                    P_delta_t[i][P[i]['length']] = 0
+            P_tensor = mask_normalize(P_tensor, mf, stdf)
+            for i in range(len(P)):
+                for j in range(F):
+                    idx_not_zero = np.where(P_tensor[i][:, j])
+                    if len(idx_not_zero[0]) > 1:
+                        x = P_tensor[i][:, j][idx_not_zero]
+                        t = P_time[i][idx_not_zero]
+                        nufft_complex, f = nufft(x, t)
+                        interval = math.floor((T - 1) / (len(idx_not_zero[0]) - 1))
+                        P_fft_tensor[i][0][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = f
+                        P_fft_tensor[i][1][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = \
+                            np.sqrt(nufft_complex.real * nufft_complex.real + nufft_complex.imag * nufft_complex.imag)
+                        P_fft_tensor[i][2][np.arange(0, interval * (len(idx_not_zero[0]) - 1) + 1, interval).tolist(), j] = \
+                            np.arctan(nufft_complex.imag / (nufft_complex.real + 1e-8))
+
+            P_tensor = torch.Tensor(P_tensor)
+
+            P_time = torch.Tensor(P_time) / 60.0  # convert mins to hours
+            P_tensor = torch.cat((P_tensor, P_time), dim=2)
+
+            P_delta_t_tensor = mask_normalize_delta(P_delta_t.squeeze(-1))
+            P_static_tensor = mask_normalize_static(P_static_tensor, ms, ss)
+            P_static_tensor = torch.Tensor(P_static_tensor)
+            y_tensor = y
+            y_tensor = torch.Tensor(y_tensor[:, 0]).type(torch.LongTensor)
+            return P_tensor, torch.FloatTensor(P_fft_tensor), P_static_tensor, torch.FloatTensor(P_delta_t_tensor), \
+                torch.FloatTensor(P_length), P_time, y_tensor
+
+
+
 def tensorize_normalize_misssing(P, y, mf, stdf, ms, ss, missingtype, missingratio, idx = None):
     origin_T, F = P[0]['arr'].shape
     D = len(P[0]['extended_static'])
@@ -577,6 +718,93 @@ def tensorize_normalize_other_missing_ode(P, y, mf, stdf, missingtype, missingra
         combined_labels = torch.squeeze(torch.FloatTensor(y))
         return torch.FloatTensor(Ptensor), combined_tt / origin_T, combined_labels
 
+def tensorize_normalize_with_nufft_mimic3_missing_ode(P, y, mf, stdf, missingtype, missingratio, idx = None, combined_tt = None):
+    origin_T, F = 292, 16
+    if missingratio > 0:
+        if missingtype == 'time':
+            T = int((1 - missingratio) * origin_T)
+            D = F
+            left_time_list = []
+            idx_list = []
+            left_time = np.zeros((len(P), T))
+            for i in range(len(P)):
+                selected_num = math.ceil(P[i][4] * (1 - missingratio))
+                if selected_num > T:
+                    selected_num = T
+                idx = np.sort(
+                    np.random.choice(P[i][4], selected_num, replace=False))
+                left_time[i][:len(idx)] = P[i][1][idx]
+                left_time_list.append(P[i][1][idx])
+                idx_list.append(idx)
+            combined_tt, inverse_indices = torch.unique(torch.cat([torch.FloatTensor(ex * 100 // 1 / 100) for ex in left_time_list]), sorted=True,
+                                                    return_inverse=True)
+            offset = 0
+            combined_vals = torch.zeros([len(P), len(combined_tt), D])
+            combined_mask = torch.zeros([len(P), len(combined_tt), D])
+            combined_labels = torch.squeeze(torch.FloatTensor(y))
+
+            for i in range(len(P)):
+                tt = left_time_list[i]
+                vals = P[i][2][idx_list[i]]
+                mask = P[i][3][idx_list[i]]
+                indices = inverse_indices[offset:offset + len(tt)]
+                offset += len(tt)
+                combined_vals[i, indices] = torch.FloatTensor(vals)
+                combined_mask[i, indices] = torch.FloatTensor(mask)
+            Ptensor = mask_normalize(combined_vals.numpy(), mf, stdf)
+            return torch.FloatTensor(Ptensor), combined_tt / torch.max(combined_tt), combined_labels
+        elif missingtype == 'variable':
+                T = origin_T
+                F = round((1 - missingratio) * F)
+                P_tensor = np.zeros((len(P), T, F))
+                P_time = np.zeros((len(P), T, 1))
+                P_delta_t = np.zeros((len(P), T, 1))
+                P_length = np.zeros([len(P), 1])
+                P_static_tensor = np.zeros((len(P), D))
+                for i in range(len(P)):
+                    P_tensor[i] = P[i]['arr'][:, idx]
+                    P_time[i] = P[i]['time']
+                    P_time_right_shifting = np.insert(P_time[i][:-1], 0, values=P_time[i][0])
+                    P_static_tensor[i] = P[i]['extended_static']
+                    P_length[i] = P[i]['length']
+                    P_delta_t[i] = (P_time[i] - np.expand_dims(P_time_right_shifting, -1)) / 60.0
+                    if P[i]['length'] < T:
+                        P_delta_t[i][P[i]['length']] = 0
+                P_tensor = mask_normalize(P_tensor, mf[idx], stdf[idx])
+                P_tensor = torch.Tensor(P_tensor)
+
+                P_time = torch.Tensor(P_time) / 60.0  # convert mins to hours
+                P_tensor = torch.cat((P_tensor, P_time), dim=2)
+
+                P_delta_t_tensor = mask_normalize_delta(P_delta_t.squeeze(-1))
+                P_static_tensor = mask_normalize_static(P_static_tensor, ms, ss)
+                P_static_tensor = torch.Tensor(P_static_tensor)
+                y_tensor = y
+                y_tensor = torch.Tensor(y_tensor[:, 0]).type(torch.LongTensor)
+                return P_tensor, P_static_tensor, torch.FloatTensor(P_delta_t_tensor), torch.tensor(
+                    P_length), P_time, y_tensor
+    else:
+        D = F
+        combined_tt, inverse_indices = torch.unique(torch.cat([torch.FloatTensor(ex[1] * 100 // 1 / 100) for ex in P]), sorted=True,
+                                                    return_inverse=True)
+        offset = 0
+        combined_vals = torch.zeros([len(P), len(combined_tt), D])
+        combined_mask = torch.zeros([len(P), len(combined_tt), D])
+
+        combined_labels = torch.squeeze(torch.FloatTensor(y))
+
+        for i in range(len(P)):
+            tt = (P[i][1] * 100) // 1 / 100
+            vals = P[i][2]
+            mask = P[i][3]
+            indices = inverse_indices[offset:offset + len(tt)]
+            offset += len(tt)
+
+            combined_vals[i, indices] = torch.FloatTensor(vals)
+            combined_mask[i, indices] = torch.FloatTensor(mask)
+        Ptensor = mask_normalize(combined_vals.numpy(), mf, stdf)
+        return torch.FloatTensor(Ptensor), combined_tt / torch.max(combined_tt), combined_labels
+
 def tensorize_normalize_other_missing_with_nufft(P, y, mf, stdf, missingtype, missingratio, idx=None):
     origin_T, F = P[0].shape
     if missingratio > 0:
@@ -694,9 +922,22 @@ def create_net(n_inputs, n_outputs, n_layers=0, n_units=10, nonlinear=nn.Tanh, a
             layers.append(nn.Softmax(dim=-1))
 
     return nn.Sequential(*layers)
+import matplotlib.pyplot as plt
 
+# 这两行代码解决 plt 中文显示的问题
+plt.rcParams['font.sans-serif'] = ['SimHei']
+plt.rcParams['axes.unicode_minus'] = False
 def get_data_split(base_path='./data/P12data', split_path='', split_type='random', reverse=False, baseline=True, dataset='P12', predictive_label='mortality'):
     # load data
+    if dataset == 'mimic3':
+        Ptrain = np.load(base_path + '/mimic3_train_x.npy', allow_pickle=True)
+        Pval = np.load(base_path + '/mimic3_val_x.npy', allow_pickle=True)
+        Ptest = np.load(base_path + '/mimic3_test_x.npy', allow_pickle=True)
+        ytrain = np.load(base_path + '/mimic3_train_y.npy', allow_pickle=True).reshape(-1, 1)
+        yval = np.load(base_path + '/mimic3_val_y.npy', allow_pickle=True).reshape(-1, 1)
+        ytest = np.load(base_path + '/mimic3_test_y.npy', allow_pickle=True).reshape(-1, 1)
+        Pdict_list = np.concatenate([Ptrain, Pval, Ptest], axis=0)
+        # return Ptrain, Pval, Ptest, ytrain, yval, ytest
     if dataset == 'P12' or dataset == 'physionet':
         Pdict_list = np.load(base_path + '/processed_data/PTdict_list.npy', allow_pickle=True)
         arr_outcomes = np.load(base_path + '/processed_data/arr_outcomes.npy', allow_pickle=True)
@@ -711,12 +952,95 @@ def get_data_split(base_path='./data/P12data', split_path='', split_type='random
         dataset_prefix = ''  # not applicable
 
     idx_train, idx_val, idx_test = np.load(base_path + split_path, allow_pickle=True)
+    #
+    # # extract train/val/test examples
+    # Ptrain = Pdict_list[idx_train]
+    # Pval = Pdict_list[idx_val]
+    # Ptest = Pdict_list[idx_test]
 
-    # extract train/val/test examples
-    Ptrain = Pdict_list[idx_train]
-    Pval = Pdict_list[idx_val]
-    Ptest = Pdict_list[idx_test]
+    var_to_length = {}
+    token_to_num = {}
+    token_size = 2
+    for i in range(len(Pdict_list)):
+        length_i = Pdict_list[i]['length']
+        # length_i = Pdict_list[i][4]
+        # length_i = 600
 
+        arr_i = Pdict_list[i]['arr'][:length_i]
+        # arr_i = Pdict_list[i][2][:length_i]
+        # arr_i = Pdict_list[i][:length_i]
+        token = 0
+        for j in range(arr_i.shape[1]):
+            var_j = arr_i[:, j]
+            token = token + int(len(np.where(var_j > 0)[0]) / token_size)
+            # try:
+            #     length_j = np.max(np.where(var_j > 0))
+            # except:
+            #     length_j = 0
+            # try:
+            #     var_to_length[j].append(length_j)
+            # except:
+            #     var_to_length[j] = []
+            #     var_to_length[j].append(length_j)
+        try:
+            token_to_num[token] = token_to_num[token] + 1
+        except:
+            token_to_num[token] = 1
+    print(token_to_num)
+    # full_size = 0
+    # valid_obs_size = 0
+    # length_to_num_dict = {}
+    # lengths = []
+    # valid_obs_nums = []
+    # valid_obs_nums_to_num_dict = {}
+    # for i in range(len(Pdict_list)):
+    #     length_i = Pdict_list[i]['length']
+    #     # length_i = Pdict_list[i][4]
+    #     # length_i = 600
+    #     try:
+    #         length_to_num_dict[length_i] = length_to_num_dict[length_i] + 1
+    #     except:
+    #         length_to_num_dict[length_i] = 1
+    #     arr_i = Pdict_list[i]['arr'][:length_i]
+    #     # arr_i = Pdict_list[i][2][:length_i]
+    #     # arr_i = Pdict_list[i][:length_i]
+    #     valid_obs_size = np.sum(arr_i[:length_i] != 0)
+    #     valid_obs_nums.append(valid_obs_size)
+    #     try:
+    #         valid_obs_nums_to_num_dict[valid_obs_size] = valid_obs_nums_to_num_dict[valid_obs_size] + 1
+    #     except:
+    #         valid_obs_nums_to_num_dict[valid_obs_size] = 1
+    #     full_size = full_size + arr_i.shape[0] * arr_i.shape[1]
+    #     lengths.append(length_i)
+    # by_value = sorted(length_to_num_dict.items(), key=lambda item: item[0])
+    # x = []
+    # y = []
+    # for d in by_value:
+    #     x.append(d[0])
+    #     y.append(d[1])
+    # plt.bar(x, y)
+    # #设置横坐标轴的标签说明
+    # plt.xlabel('样本观测长度')
+    # #设置纵坐标轴的标签说明
+    # plt.ylabel('对应样本数')
+    # #设置标题
+    # plt.title(dataset + '数据集样本观测长度分布')
+    # plt.show()
+    #
+    # by_value = sorted(valid_obs_nums_to_num_dict.items(), key=lambda item: item[0])
+    # x = []
+    # y = []
+    # for d in by_value:
+    #     x.append(d[0])
+    #     y.append(d[1])
+    # plt.bar(x, y)
+    # #设置横坐标轴的标签说明
+    # plt.xlabel('样本有效观测点数')
+    # #设置纵坐标轴的标签说明
+    # plt.ylabel('样本数')
+    # #设置标题
+    # plt.title(dataset + '数据集有效样本观测点数分布')
+    # plt.show()
     if dataset == 'P12' or dataset == 'P19' or dataset == 'PAM' or dataset == 'physionet':
         if predictive_label == 'mortality':
             y = arr_outcomes[:, -1].reshape((-1, 1))

@@ -26,8 +26,7 @@ from interpolation_layer import single_channel_interp, cross_channel_interp
 import warnings
 warnings.filterwarnings("ignore")
 
-np.random.seed(1)
-tf.set_random_seed(1)
+
 # tf.random.set_seed(10)
 
 def hold_out(mask, perc=0.2):
@@ -88,7 +87,8 @@ ap.add_argument("-e", "--epochs", type=int, default=20,
                 help="# of epochs for training")
 ap.add_argument("-ref", "--reference_points", type=int,
                 default=192, help="# of reference points")
-ap.add_argument("-d", "--dataset", type=str, default='P19', choices=['P12', 'P19', 'physionet', 'PAM'],
+ap.add_argument("-d", "--dataset", type=str, default='P19', choices=['P12',
+                            'P19', 'physionet', 'PAM', 'mimic3'],
                 help="dataset to use")
 ap.add_argument("-units", "--hidden_units", type=int,
                 default=100, help="# of hidden units")
@@ -106,33 +106,6 @@ if gpu_num > 0:
     batch = args["batch_size"]*gpu_num
 else:
     batch = args["batch_size"]
-
-
-# Loading dataset
-# y : (N,) discrete for classification, real values for regression
-# x : (N, D, tn) input multivariate time series data with dimension
-#     where N is number of data cases, D is the dimension of
-#     sparse and irregularly sampled time series and tn is the union
-#     of observed time stamps in all the dimension for a data case n.
-#     Since each tn is of variable length, we pad them with zeros to
-#     have an array representation.
-# m : (N, D, tn) where m[i,j,k] = 0 means that x[i,j,k] is not observed.
-# T : (N, D, tn) represents the actual time stamps of observation;
-
-# vitals, label = load_data()
-# # vitals = vitals[:3600]
-# # label = label[:3600]
-# vitals, timestamps = trim_los(vitals, hours_look_ahead)  # 53211 * 12 * 2881 ( 只有每个患者总观察时间戳是具体值或缺失的话是-100， 后面到2881都为零 )
-# x, m, T = fix_input_format(vitals, timestamps)  # 53211 * 12 * 200 , 53211 * 12 * 200 ,53211 * 200
-# mean_imputation(x, m)  # 对于完全缺失的患者的某一变量 用全部患者该变量的均值作为t=0时刻的插补
-# x = np.concatenate((x, m, T[:, 0, :], hold_out(m)), axis=1)  # input format 53211 * 48 * 200 观测值、掩码、时间戳、随机缺失时间戳
-# y = np.array(label)
-# print(x.shape, y.shape)
-# np.save('final_input.npy', x)
-# np.save('final_output.npy', y)
-# x = np.load('final_input.npy', allow_pickle=True)
-# y = np.load('final_output.npy', allow_pickle=True)
-
 
 dataset = args["dataset"]
 
@@ -152,6 +125,11 @@ elif dataset == 'PAM':
     variables_num = 17
     timestamp_num = 600
     n_class = 8
+elif dataset == 'mimic3':
+    d_static = 0
+    variables_num = 16
+    timestamp_num = 292
+    n_class = 2
 
 if dataset == 'P12':
     base_path = '../data/P12data'
@@ -161,7 +139,8 @@ elif dataset == 'P19':
     base_path = '../data/P19data'
 elif dataset == 'PAM':
     base_path = '../data/PAMdata'
-
+elif dataset == 'mimic3':
+    base_path = '../data/mimic3'
 
 timestamp = timestamp_num
 num_features = variables_num
@@ -189,11 +168,7 @@ def customloss(ytrue, ypred):
     x = tf.reduce_sum(x, axis=1)/num_features
     return tf.reduce_mean(x)
 
-
-seed = 0
-
 # interpolation-prediction network
-
 
 def interp_net():
     dev = "/GPU:0"
@@ -239,6 +214,8 @@ for missing_ratio in missing_ratios:
     results['recall'] = []
     results['F1'] = []
     for i in range(5):
+        np.random.seed(i)
+        tf.set_random_seed(i)
         print("Running Fold:", i+1)
 
         split_idx = i + 1
@@ -250,6 +227,8 @@ for missing_ratio in missing_ratios:
             split_path = '/splits/phy19_split' + str(split_idx) + '_new.npy'
         elif dataset == 'PAM':
             split_path = '/splits/PAMAP2_split_' + str(split_idx) + '.npy'
+        else:
+            split_path = ''
 
         Ptrain, Pval, Ptest, ytrain, yval, ytest = get_data_split(base_path, split_path, dataset=dataset)
 
@@ -333,6 +312,22 @@ for missing_ratio in missing_ratios:
                 Ptest_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
                     = tensorize_normalize_other_missing(Ptest, ytest, mf, stdf, missingtype=missingtype,
                                                         missingratio=missing_ratio, idx=idx)
+        elif dataset == 'mimic3':
+            T, F = 292, 16
+
+            Ptrain_tensor = np.zeros((len(Ptrain), T, F))
+
+            for i in range(len(Ptrain)):
+                Ptrain_tensor[i][:Ptrain[i][4]] = Ptrain[i][2]
+
+            mf, stdf = getStats(Ptrain_tensor)
+
+            Ptrain_tensor, Ptrain_fft_tensor, Ptrain_static_tensor, Ptrain_delta_t_tensor, Ptrain_length_tensor, Ptrain_time_tensor, ytrain_tensor \
+                = tensorize_normalize_with_nufft_mimic3_missing(Ptrain, ytrain, mf, stdf, missingtype, missing_ratio, idx = None)
+            Pval_tensor, Pval_fft_tensor, Pval_static_tensor, Pval_delta_t_tensor, Pval_length_tensor, Pval_time_tensor, yval_tensor \
+                = tensorize_normalize_with_nufft_mimic3_missing(Pval, yval, mf, stdf, missingtype, missing_ratio, idx = None)
+            Ptest_tensor, Ptest_fft_tensor, Ptest_static_tensor, Ptest_delta_t_tensor, Ptest_length_tensor, Ptest_time_tensor, ytest_tensor \
+                = tensorize_normalize_with_nufft_mimic3_missing(Ptest, ytest, mf, stdf, missingtype, missing_ratio, idx = None)
 
 
 
