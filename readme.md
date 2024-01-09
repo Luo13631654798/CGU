@@ -1,10 +1,4 @@
-### Continuous Graph Unit for Irregular Multivariate Time Series Classification
-
-This repository contains the PyTorch implementation for the paper [Continuous Graph Unit for Irregular Multivariate Time Series Classification ](https://openreview.net/forum?id=Jmo1yr8acL).
-
-<p align="center">
-    <img src="figure1.jpg" width="600" align="center">
-</p>
+202320143634 罗奕城 机器学习大作业 基于循环神经网络的不规则采样时间序列分类
 
 ## Training and Evaluation
 
